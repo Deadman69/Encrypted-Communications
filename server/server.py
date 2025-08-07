@@ -6,9 +6,37 @@ import json
 import time
 from cryptography.hazmat.primitives import hashes
 
-app = FastAPI()
+# Chemin du fichier de configuration
+CONFIG_FILE = "config.json"
 
-DATABASE = "messages.db"
+# Fonction pour charger la configuration depuis le fichier JSON
+def load_config():
+    # Si le fichier de configuration n'existe pas, le créer avec les valeurs par défaut
+    if not os.path.exists(CONFIG_FILE):
+        default_config = {
+            "database": "messages.db",
+            "port": 8000,
+            "host": "0.0.0.0"
+        }
+        with open(CONFIG_FILE, "w") as config_file:
+            json.dump(default_config, config_file, indent=4)
+        print(f"Fichier de configuration '{CONFIG_FILE}' créé avec les paramètres par défaut.")
+        return default_config
+
+    # Charger la configuration existante
+    with open(CONFIG_FILE, "r") as config_file:
+        config = json.load(config_file)
+    return config
+
+# Charger la configuration
+config = load_config()
+
+# Paramètres du fichier de configuration
+DATABASE = config["database"]
+PORT = config["port"]
+HOST = config["host"]
+
+app = FastAPI()
 
 # Création de la base de données si elle n'existe pas
 if not os.path.exists(DATABASE):
@@ -74,4 +102,4 @@ async def get_messages():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=HOST, port=PORT)  # Utiliser les paramètres du fichier config.json

@@ -105,29 +105,52 @@ class MessengerApp:
         self.current_conversation = None
         self.root.title("Messagerie Chiffrée")
         self.root.geometry("500x800")
+
+        # Créer un cadre principal qui va se redimensionner avec la fenêtre
         self.frame = tk.Frame(root)
         self.frame.pack(fill=tk.BOTH, expand=True)
+
+        # Mode
         self.mode_var = tk.StringVar(value="classique")
         self.label = tk.Label(root, text="Sélectionnez un mode", font=("Helvetica", 14))
         self.label.pack(pady=5)
+
+        # Radio boutons pour sélectionner le mode
         self.radio_classique = tk.Radiobutton(root, text="Mode Classique", variable=self.mode_var, value="classique")
-        self.radio_classique.pack(pady=5)
+        self.radio_classique.pack(pady=5, fill=tk.X)  # "fill=tk.X" pour étendre horizontalement
+
         self.radio_securise = tk.Radiobutton(root, text="Mode Sécurisé", variable=self.mode_var, value="securise")
-        self.radio_securise.pack(pady=5)
+        self.radio_securise.pack(pady=5, fill=tk.X)
+
+        # Bouton pour démarrer une nouvelle conversation
         self.start_button = tk.Button(root, text="Nouvelle Conversation", command=self.new_conversation)
-        self.start_button.pack(pady=5)
+        self.start_button.pack(pady=5, fill=tk.X)
+
+        # Bouton pour "poller" manuellement
         self.poll_button = tk.Button(root, text="Poller Manuellement", command=self.poll_messages)
-        self.poll_button.pack(pady=5)
+        self.poll_button.pack(pady=5, fill=tk.X)
+
+        # Fenêtre de chat qui doit se redimensionner
         self.chat_window = tk.Listbox(self.frame, height=20, width=60)
-        self.chat_window.pack()
+        self.chat_window.pack(fill=tk.BOTH, expand=True)  # Expanding pour occuper l'espace libre
+
+        # Zone de texte pour envoyer un message
         self.text_entry = tk.Entry(root, width=50)
-        self.text_entry.pack(pady=5)
+        self.text_entry.pack(pady=5, fill=tk.X)
+
+        # Bouton pour envoyer le message
         self.send_button = tk.Button(root, text="Envoyer", command=self.send_message)
         self.send_button.pack(pady=5)
+
+        # Label pour afficher le statut du serveur
+        self.server_status_label = tk.Label(root, text="Serveur : Hors ligne", fg="red", font=("Helvetica", 12))
+        self.server_status_label.pack(pady=5)
+
+        # Démarrer le thread de polling
         self.poll_thread = threading.Thread(target=self.poll_messages_periodically)
         self.poll_thread.daemon = True
         self.poll_thread.start()
-
+        
     def new_conversation(self):
         contact_public_key_str = simpledialog.askstring("Clé Publique", "Entrez la clé publique du destinataire:")
         contact_public_key = PublicKey(contact_public_key_str, encoder=HexEncoder)
@@ -160,37 +183,43 @@ class MessengerApp:
             return
         
         contact_public_key = self.current_conversation.contact_public_key
-        response = requests.post("http://localhost:8000/get/")  # Récupérer les messages
-        if response.status_code == 200:
-            data = response.json()
-            for msg in data.get("messages", []):
-                message_id = msg.get('id')  # Supposons que chaque message ait un ID unique
-                if not self.current_conversation.is_message_received(message_id):
-                    encrypted_message = msg['encrypted_message']
-                    decrypted_message = decrypt_message(encrypted_message, contact_public_key, self.sender_private_key)
-                    
-                    # Récupérer la clé publique 'sender' et la convertir en format hexadécimal lisible
-                    sender = msg.get('sender')
-                    
-                    # Vérifie si 'sender' est en bytes ou en str et le convertit en bytes si nécessaire
-                    if isinstance(sender, str):
-                        sender = bytes.fromhex(sender)  # Si c'est une chaîne hexadécimale, on la convertit en bytes
-                    
-                    # Convertir 'sender' en hex lisible
-                    sender_readable = HexEncoder.encode(sender).decode('utf-8')  # Convertir en hex et décoder en chaîne
+        try:
+            response = requests.post("http://localhost:8000/get/")  # Récupérer les messages
+            if response.status_code == 200:
+                self.server_status_label.config(text="Serveur : En ligne", fg="green")
+                data = response.json()
+                for msg in data.get("messages", []):
+                    message_id = msg.get('id')  # Supposons que chaque message ait un ID unique
+                    if not self.current_conversation.is_message_received(message_id):
+                        encrypted_message = msg['encrypted_message']
+                        decrypted_message = decrypt_message(encrypted_message, contact_public_key, self.sender_private_key)
+                        
+                        # Récupérer la clé publique 'sender' et la convertir en format hexadécimal lisible
+                        sender = msg.get('sender')
+                        if isinstance(sender, str):
+                            sender = bytes.fromhex(sender)  # Si c'est une chaîne hexadécimale, on la convertit en bytes
+                        sender_readable = HexEncoder.encode(sender).decode('utf-8')  # Convertir en hex et décoder en chaîne
 
-                    if sender != self.sender_public_key:  # Si l'expéditeur n'est pas soi-même
-                        self.current_conversation.add_message(decrypted_message, encrypted=False, message_id=message_id)
-                        self.chat_window.insert(tk.END, f"De {sender_readable}: {decrypted_message}")
-                    else:
-                        # Si le message vient de soi-même, afficher sous forme de "Vous : XXXXX"
-                        self.current_conversation.add_message(decrypted_message, encrypted=False, message_id=message_id)
-                        self.chat_window.insert(tk.END, f"Vous : {decrypted_message}")
-                    
-                    self.current_conversation.mark_message_as_received(message_id)
+                        # Troncature du nom (prendre les 4 premiers et 4 derniers caractères + "...")
+                        if len(sender_readable) > 8:
+                            sender_readable = sender_readable[:4] + "..." + sender_readable[-4:]
+
+                        if sender != self.sender_public_key:  # Si l'expéditeur n'est pas soi-même
+                            self.current_conversation.add_message(decrypted_message, encrypted=False, message_id=message_id)
+                            self.chat_window.insert(tk.END, f"De {sender_readable}: {decrypted_message}")
+                        else:
+                            # Si le message vient de soi-même, afficher sous forme de "Vous : XXXXX"
+                            self.current_conversation.add_message(decrypted_message, encrypted=False, message_id=message_id)
+                            self.chat_window.insert(tk.END, f"Vous : {decrypted_message}")
+                        
+                        self.current_conversation.mark_message_as_received(message_id)
                 
                 if self.current_conversation.mode == 'securise':
                     self.current_conversation.clear_messages()
+            else:
+                self.server_status_label.config(text="Serveur : Hors ligne", fg="red")
+        except requests.exceptions.RequestException:
+            self.server_status_label.config(text="Serveur : Hors ligne", fg="red")
 
     def poll_messages_periodically(self):
         while True:

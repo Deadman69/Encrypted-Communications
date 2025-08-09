@@ -2,7 +2,9 @@ import sys, os, json, time, threading, random, mimetypes, base64, io, uuid, webb
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional, List, Dict, Tuple
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from nacl.public import PrivateKey, PublicKey
 from nacl.encoding import HexEncoder
@@ -83,6 +85,34 @@ class Identity:
             sign_pk_hex=sign_pk.encode().hex()
         )
 
+    @staticmethod
+    def from_material(name: str,
+                      box_sk_hex: str,
+                      box_pk_hex: Optional[str],
+                      sign_sk_hex: str,
+                      sign_pk_hex: Optional[str]) -> "Identity":
+        if not box_pk_hex:
+            sk = PrivateKey(box_sk_hex, encoder=HexEncoder)
+            box_pk_hex = sk.public_key.encode(encoder=HexEncoder).decode()
+        if not sign_pk_hex:
+            sk = SigningKey(bytes.fromhex(sign_sk_hex))
+            sign_pk_hex = sk.verify_key.encode().hex()
+
+        def _is_hex_32(s):
+            try: return s and len(s)==64 and int(s,16) >= 0
+            except: return False
+        if not (_is_hex_32(box_sk_hex) and _is_hex_32(box_pk_hex) and _is_hex_32(sign_sk_hex) and _is_hex_32(sign_pk_hex)):
+            raise ValueError("Invalid key material (must be 32-byte hex)")
+
+        return Identity(
+            id_=str(uuid.uuid4()),
+            name=name,
+            box_sk_hex=box_sk_hex,
+            box_pk_hex=box_pk_hex,
+            sign_sk_hex=sign_sk_hex,
+            sign_pk_hex=sign_pk_hex
+        )
+
     def to_dict(self):
         return {
             "id": self.id, "name": self.name,
@@ -126,6 +156,24 @@ class IdentityStore:
         self.identities[idn.id] = idn
         self.save()
         return idn
+
+    def add_from_material(self, name: str, *,
+                          box_sk_hex: str, box_pk_hex: Optional[str],
+                          sign_sk_hex: str, sign_pk_hex: Optional[str]) -> Identity:
+        idn = Identity.from_material(name, box_sk_hex, box_pk_hex, sign_sk_hex, sign_pk_hex)
+        self.identities[idn.id] = idn
+        self.save()
+        return idn
+
+    def replace_keys(self, id_: str, *,
+                     box_sk_hex: str, box_pk_hex: str,
+                     sign_sk_hex: str, sign_pk_hex: str):
+        idn = self.identities[id_]
+        idn.box_sk = PrivateKey(box_sk_hex, encoder=HexEncoder)
+        idn.box_pk = PublicKey(box_pk_hex, encoder=HexEncoder)
+        idn.sign_sk = SigningKey(bytes.fromhex(sign_sk_hex))
+        idn.sign_pk = _VerifyKey(bytes.fromhex(sign_pk_hex))
+        self.save()
 
     def rename(self, id_: str, new_name: str):
         self.identities[id_].name = new_name; self.save()
@@ -177,7 +225,7 @@ class Conversation:
         self.identity_name = ident_name
         self.contact_name = contact_name
         self.contact_pub_hex = contact_pub_hex
-        self.messages = []  # [{direction, kind, text/filename/data, ts, pending/status}]
+        self.messages = []  # [{local_id?, direction, kind, text/filename/data, ts, pending/status, progress}]
         self._image_refs = []
         self.unread = 0
 
@@ -209,6 +257,9 @@ class MessengerApp:
         self._index_to_key: List[Tuple[str,str]] = []
         self._seen_ids = set()
         self._busy = 0
+
+        # messages en cours (annulation)
+        self._pending: Dict[str, threading.Event] = {}
 
         # historique local chiffré (si pas secure)
         self._load_history()
@@ -304,13 +355,16 @@ class MessengerApp:
             print("load_history error:", e)
 
     # ----- Register -----
+    def _register_identity(self, idn: Identity):
+        try:
+            url = self.cfg["server_url"].rstrip("/") + "/register"
+            signed_post(url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
+        except Exception as e:
+            print("Register failed for", idn.name, e)
+
     def _register_all_identities(self):
         for idn in self.ident_store.list():
-            try:
-                url = self.cfg["server_url"].rstrip("/") + "/register"
-                signed_post(url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
-            except Exception as e:
-                print("Register failed for", idn.name, e)
+            self._register_identity(idn)
 
     # ----- UI -----
     def _build_ui(self):
@@ -445,13 +499,15 @@ class MessengerApp:
 
     # ----- Managers -----
     def _open_identities_manager(self):
-        def after_add(idn):
+        def after_add_or_change(idn):
             try:
                 url = self.cfg["server_url"].rstrip("/") + "/register"
                 signed_post(url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
             except Exception as e:
                 print("Register failed:", e)
-        IdentitiesManager(self.root, self.ident_store, self.tr, on_added=after_add)
+        IdentitiesManager(self.root, self.ident_store, self.tr,
+                          on_added=after_add_or_change,
+                          on_changed=after_add_or_change)
 
     def _open_contacts_manager(self):
         ContactsManager(self.root, self.contacts, self.ident_store, self.tr)
@@ -524,7 +580,6 @@ class MessengerApp:
 
     # ----- UI helpers -----
     def _update_add_contact_button(self):
-        # Affiche le bouton si le contact n'est pas enregistré
         if not self.current_conv:
             self.btn_add_from_msg.grid_remove(); return
         if self.contacts.find_by_pub(self.current_conv.contact_pub_hex):
@@ -534,7 +589,7 @@ class MessengerApp:
 
     def _render_header(self):
         if not self.current_conv:
-            self.header_lbl.config(text=self.tr("header.none")); 
+            self.header_lbl.config(text=self.tr("header.none"))
             self._update_add_contact_button()
             return
         c = self.current_conv
@@ -548,20 +603,30 @@ class MessengerApp:
 
     def _append_image(self, data_bytes, tag):
         try:
-            pil_img = Image.open(io.BytesIO(data_bytes))
+            bio = io.BytesIO(data_bytes)
+            pil_img = Image.open(bio)
+            try:
+                pil_img.load()
+            except OSError:
+                bio.seek(0)
+                pil_img = Image.open(bio)
+                pil_img.load()
         except Exception:
-            self._append_line("[image]", tag); return
+            self._append_line("[image]", tag)
+            return
+
         self.chat_text.configure(state="normal")
         max_w, max_h = 420, 320
         w, h = pil_img.size
-        scale = min(max_w/w, max_h/h, 1.0)
+        scale = min(max_w / w, max_h / h, 1.0)
         if scale < 1.0:
-            pil_img = pil_img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
+            pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         img = ImageTk.PhotoImage(pil_img)
         self.current_conv._image_refs.append(img)
         self.chat_text.image_create("end", image=img, padx=8)
         self.chat_text.insert("end", "\n", (tag,))
-        self.chat_text.configure(state="disabled"); self.chat_text.see("end")
+        self.chat_text.configure(state="disabled")
+        self.chat_text.see("end")
 
     def _append_file_link(self, filename, data_bytes, tag):
         self.chat_text.configure(state="normal")
@@ -594,7 +659,22 @@ class MessengerApp:
                 self._append_file_link(m.get("filename","fichier"), m["data"], direction)
 
             if m.get("pending"):
-                self._append_line(self.tr("msg.sending"), meta_tag)
+                txt = self.tr("msg.sending")
+                if "progress" in m:
+                    try:
+                        txt += f" {int(m['progress'])}%"
+                    except:
+                        pass
+                self._append_line(txt, meta_tag)
+
+                # Lien Annuler (supprime le message en cours)
+                if "local_id" in m:
+                    tagname = f"cancel_{m['local_id']}"
+                    self.chat_text.configure(state="normal")
+                    self.chat_text.insert("end", "[" + self.tr("msg.cancel") + "]\n", (meta_tag, tagname))
+                    self.chat_text.tag_bind(tagname, "<Button-1>", lambda _e, mid=m["local_id"]: self._cancel_message(mid))
+                    self.chat_text.configure(state="disabled")
+
             elif m.get("status") == "sent":
                 self._append_line(self.tr("msg.sent"), meta_tag)
             elif m.get("status") == "failed":
@@ -621,13 +701,63 @@ class MessengerApp:
             except:
                 pass
 
-    def _send_payload_async(self, recipient_pub_hex: str, payload_builder_callable, on_done=None):
+    def _cancel_message(self, local_id: str):
+        ev = self._pending.get(local_id)
+        if ev:
+            ev.set()
+        if self.current_conv:
+            before = len(self.current_conv.messages)
+            self.current_conv.messages = [m for m in self.current_conv.messages if m.get("local_id") != local_id]
+            if len(self.current_conv.messages) != before:
+                self._render_conversation()
+                self._save_history()
+
+    def _send_payload_async(self, recipient_pub_hex: str, payload_builder_callable, on_done=None, progress_setter=None):
+        """
+        payload_builder_callable(progress_cb) -> dict
+        progress_setter(pct: float)           -> met à jour l’UI (0..100)
+        """
+        cancel_event = threading.Event()
+        local_id = str(uuid.uuid4())
+        self._pending[local_id] = cancel_event
+
+        def ui_progress(p):
+            if progress_setter:
+                try:
+                    self.root.after(0, lambda: (progress_setter(max(0, min(100, p))), self._render_conversation()))
+                except:
+                    pass
+
         def worker():
             ok = True
+            cancelled = False
             try:
-                payload = payload_builder_callable()
+                # 0..10% : préparation (builder peut animer jusqu’à 10%)
+                ui_progress(1)
+                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+                payload = payload_builder_callable(lambda p: ui_progress(min(p, 10)))
+
+                # 10..20% : chiffrement
+                ui_progress(12)
+                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
                 cipher_hex = encrypt_for(recipient_pub_hex, payload)
-                nonce_hex = self.pow.compute_nonce(cipher_hex)
+                ui_progress(20)
+
+                # 20..90% : PoW
+                def pow_hook(tries, expected):
+                    if cancel_event.is_set():
+                        raise RuntimeError("CANCELLED")
+                    try:
+                        frac = float(tries) / float(expected)
+                    except Exception:
+                        frac = 0.0
+                    ui_progress(20 + 70 * min(0.999, max(0.0, frac)))
+
+                nonce_hex = self.pow.compute_nonce(cipher_hex, progress_hook=pow_hook, cancel_event=cancel_event)
+                ui_progress(90)
+                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+
+                # 90..100% : upload HTTP (stream + annulation)
                 url = self.cfg["server_url"].rstrip("/") + "/put/"
                 exp = int(time.time()) + 24*3600
                 body = {
@@ -636,18 +766,44 @@ class MessengerApp:
                     "cipher_hex": cipher_hex,
                     "pow": {"salt": self.pow.salt, "nonce": nonce_hex}
                 }
-                requests.post(url, json=body, timeout=20).raise_for_status()
+                body_bytes = json.dumps(body, separators=(',',':')).encode()
+
+                class ProgressBytesIO(io.BytesIO):
+                    def __init__(self, buf):
+                        super().__init__(buf)
+                        self._total = len(buf)
+                        self._sent = 0
+                    def read(self, n=-1):
+                        if cancel_event.is_set():
+                            raise RuntimeError("CANCELLED")
+                        chunk = super().read(n)
+                        self._sent += len(chunk)
+                        if self._total > 0:
+                            frac = self._sent / self._total
+                            ui_progress(90 + 10 * min(1.0, max(0.0, frac)))
+                        return chunk
+
+                stream = ProgressBytesIO(body_bytes)
+                headers = {"Content-Type": "application/json"}
+                requests.post(url, data=stream, headers=headers, timeout=20).raise_for_status()
+                ui_progress(100)
+
             except Exception as e:
                 ok = False
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                cancelled = (str(e) == "CANCELLED")
+                if not cancelled:
+                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
             finally:
+                try: del self._pending[local_id]
+                except: pass
                 if on_done:
-                    self.root.after(0, lambda: on_done(ok))
+                    self.root.after(0, lambda: on_done(ok, cancelled))
                 self.root.after(0, self._dec_busy)
                 self.root.after(0, self._save_history)
 
         self._inc_busy()
         threading.Thread(target=worker, daemon=True).start()
+        return local_id
 
     # ----- ENVOI (texte) -----
     def _send_text(self):
@@ -660,12 +816,16 @@ class MessengerApp:
         idn = self.ident_store.identities[c.identity_id]
         ts = int(time.time())
 
-        item = {"direction":"out","kind":"text","text":msg,"ts":ts,"pending":True}
+        item = {"local_id": "", "direction":"out","kind":"text","text":msg,"ts":ts,"pending":True,"progress":0}
         c.messages.append(item)
         self._render_conversation()
         self._save_history()
 
-        def build():
+        def set_prog(p):
+            item["progress"] = p
+
+        def build(progress_cb):
+            progress_cb(3)
             payload = {
                 "t": "text",
                 "sender_box_pub": idn.box_pub_hex,
@@ -675,14 +835,20 @@ class MessengerApp:
             }
             to_sign = canonical_dumps({k:v for k,v in payload.items() if k!="sig"})
             payload["sig"] = idn.sign_sk.sign(to_sign).signature.hex()
+            progress_cb(8)
             return payload
 
-        def done(ok):
+        def done(ok, cancelled):
+            if cancelled:
+                return
             item["pending"] = False
             item["status"] = "sent" if ok else "failed"
+            item.pop("progress", None)
             self._render_conversation()
 
-        self._send_payload_async(c.contact_pub_hex, build, on_done=done)
+        local_id = self._send_payload_async(c.contact_pub_hex, build, on_done=done, progress_setter=set_prog)
+        item["local_id"] = local_id
+        self._render_conversation()
 
     # ----- ENVOI (fichier / image) -----
     def _send_file_dialog(self):
@@ -694,7 +860,7 @@ class MessengerApp:
 
         try:
             with open(path, "rb") as f:
-                data = f.read()
+                data = f.read()  # pour l’aperçu local immédiat
         except Exception as e:
             messagebox.showerror("Error", str(e)); return
 
@@ -705,19 +871,39 @@ class MessengerApp:
         ts = int(time.time())
 
         item = {
+            "local_id": "",
             "direction":"out",
             "kind":"image" if is_image else "file",
             "data": data,
             "filename": filename,
             "ts": ts,
-            "pending": True
+            "pending": True,
+            "progress": 0
         }
         c.messages.append(item)
         self._render_conversation()
         self._save_history()
 
-        def build():
-            b64 = base64.b64encode(data).decode()
+        def set_prog(p):
+            item["progress"] = p
+
+        def b64encode_with_progress(buf: bytes, progress_cb, start=0.0, end=10.0):
+            if not buf:
+                progress_cb(end); return ""
+            chunk = 64 * 1024
+            total = len(buf)
+            out_parts = []
+            done = 0
+            for i in range(0, total, chunk):
+                part = base64.b64encode(buf[i:i+chunk])
+                out_parts.append(part)
+                done += min(chunk, total - i)
+                frac = done / total
+                progress_cb(start + (end-start) * frac)
+            return b"".join(out_parts).decode()
+
+        def build(progress_cb):
+            b64 = b64encode_with_progress(data, progress_cb, 0, 10)
             payload = {
                 "t": "image" if is_image else "file",
                 "sender_box_pub": idn.box_pub_hex,
@@ -729,36 +915,37 @@ class MessengerApp:
             }
             to_sign = canonical_dumps({k:v for k,v in payload.items() if k!="sig"})
             payload["sig"] = idn.sign_sk.sign(to_sign).signature.hex()
+            progress_cb(10)
             return payload
 
-        def done(ok):
+        def done(ok, cancelled):
+            if cancelled:
+                return
             item["pending"] = False
             item["status"] = "sent" if ok else "failed"
+            item.pop("progress", None)
             self._render_conversation()
 
-        self._send_payload_async(c.contact_pub_hex, build, on_done=done)
+        local_id = self._send_payload_async(c.contact_pub_hex, build, on_done=done, progress_setter=set_prog)
+        item["local_id"] = local_id
+        self._render_conversation()
 
     # ----- Ajouter le contact courant s'il est inconnu -----
     def _add_contact_from_current(self):
         if not self.current_conv:
             return
         conv = self.current_conv
-        # si déjà reconnu, on n'affiche pas le bouton (sécurité)
         if self.contacts.find_by_pub(conv.contact_pub_hex):
             self._update_add_contact_button()
             return
-        # préremplir la clé & l'identité utilisée
         idents = self.ident_store.list()
-        # Trouver l'identité de la conv
         ident_default = conv.identity_id
-        # Construire un faux contact dict pour passer à _open_conversation ensuite si besoin
         dlg = ContactDialog(self.root, idents, self.tr,
                             "contact.title.new", name="", key=conv.contact_pub_hex, identity_id=ident_default)
         self.root.wait_window(dlg)
         if dlg.result:
             name, key, ident_id = dlg.result
             self.contacts.add(name, key, ident_id)
-            # mettre à jour le nom dans la conversation
             conv.contact_name = name
             self._refresh_conv_sidebar(select_key=(conv.identity_id, conv.contact_pub_hex))
             self._save_history()
@@ -882,7 +1069,6 @@ class MessengerApp:
         self.cfg["secure_mode"] = new_val
         save_config(self.cfg)
         if new_val:
-            # confirmation + purge (identités, contacts, vault)
             if messagebox.askyesno(self.tr("secure.confirm.title"), self.tr("secure.confirm.text")):
                 for p in (IDENTS_FILE, CONTACTS_FILE, VAULT_FILE, VAULT_KEY_FILE):
                     try:
@@ -902,10 +1088,9 @@ class MessengerApp:
             self._save_history()
 
     def _on_close(self):
-        # Si secure mode -> avertissement + purge AVANT de quitter
         if self.cfg.get("secure_mode", False):
             if not messagebox.askyesno(self.tr("secure.exit.title"), self.tr("secure.exit.text")):
-                return  # annuler la fermeture
+                return
             for p in (IDENTS_FILE, CONTACTS_FILE, VAULT_FILE, VAULT_KEY_FILE):
                 try:
                     if os.path.exists(p): os.remove(p)

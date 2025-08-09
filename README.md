@@ -262,6 +262,8 @@ X-Signature: <hex( Sign( f"{ts}.{sha256(body)}" ) )>
 **One-file (recommended):**
 
 ```powershell
+cd client
+
 pyinstaller --clean --noconfirm ^
   --onefile ^
   --noconsole ^
@@ -273,11 +275,13 @@ pyinstaller --clean --noconfirm ^
 **One-dir (portable folder):**
 
 ```powershell
-pyinstaller --clean --noconfirm ^
-  --onedir ^
-  --noconsole ^
-  --name EncryptedClient ^
-  --add-data "langs;langs" ^
+cd client
+
+pyinstaller --clean --noconfirm `
+  --onedir `
+  --noconsole `
+  --name EncryptedClient `
+  --add-data "langs;langs" `
   app.py
 ```
 
@@ -299,11 +303,13 @@ Replace `--add-data "langs;langs"` with:
 
 ```powershell
 # Windows
+cd server
 pyinstaller --clean --noconfirm --onefile --name EncryptedServer app.py
 ```
 
 ```bash
 # macOS/Linux
+cd server
 pyinstaller --clean --noconfirm --onefile --name EncryptedServer app.py
 ```
 

@@ -62,17 +62,32 @@ class PoWHelper:
             self.salt = str(int(now // max(self.window_secs, 1)))
             self.difficulty = 5
 
-    def compute_nonce(self, cipher_hex: str) -> str:
+    def compute_nonce(self, cipher_hex: str, progress_hook=None, cancel_event=None) -> str:
         # Minage protégé par un lock pour ne pas partir en parallèle
         with self._lock:
             self._refresh_if_needed()
             salt = self.salt or str(int(time.time() // max(self.window_secs, 1)))
             target_prefix = "0" * int(self.difficulty)
             ct = bytes.fromhex(cipher_hex)
+
             nonce_int = 0
+            # Estimation moyenne d’essais pour un préfixe hex de n zéros = 16^n
+            expected = max(1, 16 ** int(self.difficulty))
+            step = 5000  # fréquence d’update
+
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("CANCELLED")
+
                 nonce = nonce_int.to_bytes(8, "big")
                 h = sha256_hex(salt.encode() + nonce + ct)
                 if h.startswith(target_prefix):
+                    if progress_hook:
+                        try: progress_hook(expected, expected)  # 100 %
+                        except: pass
                     return nonce.hex()
+
                 nonce_int += 1
+                if progress_hook and (nonce_int % step == 0):
+                    try: progress_hook(nonce_int, expected)
+                    except: pass

@@ -2,7 +2,8 @@ import os, json
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import List, Optional, Callable
-from nacl.public import PublicKey
+from nacl.public import PublicKey, PrivateKey
+from nacl.signing import SigningKey
 from nacl.encoding import HexEncoder
 
 # ================== i18n ==================
@@ -75,10 +76,21 @@ class I18n:
             "btn.delete": "Supprimer",
             "btn.close": "Fermer",
 
+            # Nouvelles clés i18n
+            "btn.copy_my_pub": "Copier ma clé publique",
+            "msg.copied": "Copié dans le presse-papiers",
+            "adv.toggle": "Mode avancé",
+            "adv.box_sk": "Clé privée de chiffrement (hex)",
+            "adv.box_pk": "Clé publique de chiffrement (hex, optionnelle)",
+            "adv.sign_sk": "Clé privée de signature (hex)",
+            "adv.sign_pk": "Clé publique de signature (hex, optionnelle)",
+            "error.keys_incomplete": "Clés incomplètes ou invalides (hex 32 octets).",
+
             "msg.sending": "⌛ Envoi…",
             "msg.sent": "✓ Envoyé",
             "msg.failed": "✗ Échec",
-
+            "msg.cancel": "Annuler l’envoi",
+            
             "btn.add_contact_from_msg": "Ajouter le contact",
 
             "secure.confirm.title": "Mode sécurisé",
@@ -144,9 +156,20 @@ class I18n:
             "btn.delete": "Delete",
             "btn.close": "Close",
 
+            # New keys
+            "btn.copy_my_pub": "Copy my public key",
+            "msg.copied": "Copied to clipboard",
+            "adv.toggle": "Advanced mode",
+            "adv.box_sk": "Encryption private key (hex)",
+            "adv.box_pk": "Encryption public key (hex, optional)",
+            "adv.sign_sk": "Signing private key (hex)",
+            "adv.sign_pk": "Signing public key (hex, optional)",
+            "error.keys_incomplete": "Keys are incomplete or invalid (32-byte hex).",
+
             "msg.sending": "⌛ Sending…",
             "msg.sent": "✓ Sent",
             "msg.failed": "✗ Failed",
+            "msg.cancel": "Cancel send",
 
             "btn.add_contact_from_msg": "Add contact",
 
@@ -236,43 +259,133 @@ class ContactDialog(tk.Toplevel):
         self.result = (name, key, identity_id); self.destroy()
 
 class IdentityDialog(tk.Toplevel):
-    def __init__(self, parent, tr: Callable[[str], str], title_key="identities.title", initial_name=""):
+    """
+    Dialogue d'identité avec Mode Avancé (saisie manuelle des clés).
+    - En mode simple: seul le nom.
+    - En mode avancé: box_sk (+ optionnel box_pk), sign_sk (+ optionnel sign_pk).
+    """
+    def __init__(self, parent, tr: Callable[[str], str], title_key="identities.title",
+                 initial_name="", initial_keys=None):
         super().__init__(parent)
         self.tr = tr
         self.title(self.tr(title_key)); self.resizable(False, False)
         self.result = None
+        self._initial_keys = initial_keys or {}
 
         frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=self.tr("contact.name")).grid(row=0, column=0, sticky="w")
-        self.e = ttk.Entry(frm); self.e.grid(row=0, column=1, sticky="ew"); self.e.insert(0, initial_name or "")
         frm.columnconfigure(1, weight=1)
 
-        btns = ttk.Frame(frm); btns.grid(row=1, column=0, columnspan=2, pady=(10,0), sticky="e")
+        # Nom
+        ttk.Label(frm, text=self.tr("contact.name")).grid(row=0, column=0, sticky="w")
+        self.e_name = ttk.Entry(frm); self.e_name.grid(row=0, column=1, sticky="ew")
+        self.e_name.insert(0, initial_name or "")
+
+        # Toggle avancé
+        self.var_adv = tk.BooleanVar(value=False)
+        chk = ttk.Checkbutton(frm, text=self.tr("adv.toggle"),
+                              variable=self.var_adv, command=self._toggle_adv)
+        chk.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6,4))
+
+        # Zone avancée
+        self.adv = ttk.Frame(frm); self.adv.grid(row=2, column=0, columnspan=2, sticky="ew")
+        for i in range(2): self.adv.columnconfigure(i, weight=1)
+
+        ttk.Label(self.adv, text=self.tr("adv.box_sk")).grid(row=0, column=0, sticky="w")
+        self.e_box_sk = ttk.Entry(self.adv, width=70); self.e_box_sk.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(self.adv, text=self.tr("adv.box_pk")).grid(row=1, column=0, sticky="w", pady=(4,0))
+        self.e_box_pk = ttk.Entry(self.adv, width=70); self.e_box_pk.grid(row=1, column=1, sticky="ew", pady=(4,0))
+
+        ttk.Label(self.adv, text=self.tr("adv.sign_sk")).grid(row=2, column=0, sticky="w", pady=(4,0))
+        self.e_sign_sk = ttk.Entry(self.adv, width=70); self.e_sign_sk.grid(row=2, column=1, sticky="ew", pady=(4,0))
+
+        ttk.Label(self.adv, text=self.tr("adv.sign_pk")).grid(row=3, column=0, sticky="w", pady=(4,0))
+        self.e_sign_pk = ttk.Entry(self.adv, width=70); self.e_sign_pk.grid(row=3, column=1, sticky="ew", pady=(4,0))
+
+        # Pré-remplissage si édition
+        if self._initial_keys:
+            self.e_box_sk.insert(0, self._initial_keys.get("box_sk_hex",""))
+            self.e_box_pk.insert(0, self._initial_keys.get("box_pk_hex",""))
+            self.e_sign_sk.insert(0, self._initial_keys.get("sign_sk_hex",""))
+            self.e_sign_pk.insert(0, self._initial_keys.get("sign_pk_hex",""))
+
+        # Masquer au démarrage
+        self._show_adv(False)
+
+        # Boutons
+        btns = ttk.Frame(frm); btns.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky="e")
         ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
         ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
 
-        self.bind("<Return>", lambda _e: self._ok()); self.grab_set(); self.e.focus_set()
+        self.bind("<Return>", lambda _e: self._ok())
+        self.grab_set(); self.e_name.focus_set()
+
+    def _toggle_adv(self):
+        self._show_adv(self.var_adv.get())
+
+    def _show_adv(self, show: bool):
+        state = "normal" if show else "disabled"
+        for w in (self.e_box_sk, self.e_box_pk, self.e_sign_sk, self.e_sign_pk):
+            w.configure(state=state)
+        self.adv.grid() if show else self.adv.grid_remove()
 
     def _ok(self):
-        name = self.e.get().strip()
+        name = self.e_name.get().strip()
         if not name:
             messagebox.showerror(self.tr("identities.title"), self.tr("error.name_required")); return
-        self.result = name; self.destroy()
+
+        out = {"name": name}
+        if self.var_adv.get():
+            box_sk = (self.e_box_sk.get() or "").strip()
+            box_pk = (self.e_box_pk.get() or "").strip()
+            sign_sk = (self.e_sign_sk.get() or "").strip()
+            sign_pk = (self.e_sign_pk.get() or "").strip()
+
+            def _is_hex_32(s):
+                try: return s and len(s)==64 and int(s,16) >= 0
+                except: return False
+
+            # Exiger au moins les PRIVÉES
+            if not (_is_hex_32(box_sk) and _is_hex_32(sign_sk)):
+                messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
+
+            # Les publiques sont optionnelles (recalculées si absentes)
+            if box_pk and not _is_hex_32(box_pk): 
+                messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
+            if sign_pk and not _is_hex_32(sign_pk): 
+                messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
+
+            out["keys"] = {
+                "box_sk_hex": box_sk,
+                "box_pk_hex": box_pk or None,
+                "sign_sk_hex": sign_sk,
+                "sign_pk_hex": sign_pk or None
+            }
+
+        self.result = out
+        self.destroy()
 
 # ================== Windows (Managers) ==================
 class IdentitiesManager(tk.Toplevel):
-    def __init__(self, parent, ident_store, tr: Callable[[str], str], on_added: Optional[Callable] = None):
+    """Fenêtre de gestion des identités."""
+    def __init__(self, parent, ident_store, tr: Callable[[str], str],
+                 on_added: Optional[Callable] = None,
+                 on_changed: Optional[Callable] = None):
         super().__init__(parent)
         self.ident_store = ident_store
         self.tr = tr
         self.on_added = on_added
-        self.title(self.tr("identities.title")); self.geometry("520x380")
+        self.on_changed = on_changed
+
+        self.title(self.tr("identities.title")); self.geometry("640x420")
         frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
         self.lb = tk.Listbox(frame, height=12); self.lb.pack(fill="both", expand=True)
 
         btns = ttk.Frame(frame); btns.pack(fill="x", pady=(8,0))
         ttk.Button(btns, text=self.tr("btn.add"), command=self._add).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.rename"), command=self._rename).pack(side="left", padx=6)
+        ttk.Button(btns, text=self.tr("btn.edit"), command=self._edit).pack(side="left")
+        ttk.Button(btns, text=self.tr("btn.copy_my_pub"), command=self._copy_my_pub).pack(side="left", padx=6)
         ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.close"), command=self.destroy).pack(side="right")
         self._refresh()
@@ -283,33 +396,107 @@ class IdentitiesManager(tk.Toplevel):
             short = idn.box_pub_hex[:8] + "…" + idn.box_pub_hex[-8:]
             self.lb.insert(tk.END, f"{idn.name} · {short}")
 
+    def _current(self):
+        sel = self.lb.curselection()
+        if not sel: 
+            return None
+        return self.ident_store.list()[sel[0]]
+
+    def _copy_my_pub(self):
+        idn = self._current()
+        if not idn: return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(idn.box_pub_hex)
+            self.update()
+            messagebox.showinfo(self.tr("identities.title"), self.tr("msg.copied"))
+        except Exception as e:
+            messagebox.showerror(self.tr("identities.title"), str(e))
+
     def _add(self):
         dlg = IdentityDialog(self, self.tr, "identities.title")
         self.wait_window(dlg)
-        if dlg.result:
-            idn = self.ident_store.add(dlg.result)
+        if not dlg.result: 
+            return
+        name = dlg.result["name"]
+        keys = dlg.result.get("keys")
+        try:
+            if keys:
+                idn = self.ident_store.add_from_material(
+                    name=name,
+                    box_sk_hex=keys["box_sk_hex"], box_pk_hex=keys.get("box_pk_hex"),
+                    sign_sk_hex=keys["sign_sk_hex"], sign_pk_hex=keys.get("sign_pk_hex")
+                )
+            else:
+                idn = self.ident_store.add(name)
             if self.on_added: self.on_added(idn)
             self._refresh()
+        except Exception as e:
+            messagebox.showerror(self.tr("identities.title"), str(e))
+
+    def _edit(self):
+        idn = self._current()
+        if not idn: return
+        init = {
+            "box_sk_hex": idn.box_sk.encode(encoder=HexEncoder).decode(),
+            "box_pk_hex": idn.box_pub_hex,
+            "sign_sk_hex": idn.sign_sk.encode().hex(),
+            "sign_pk_hex": idn.sign_pub_hex
+        }
+        dlg = IdentityDialog(self, self.tr, "identities.title", initial_name=idn.name, initial_keys=init)
+        self.wait_window(dlg)
+        if not dlg.result: 
+            return
+        name = dlg.result["name"]
+        keys = dlg.result.get("keys")
+
+        try:
+            if name and name != idn.name:
+                self.ident_store.rename(idn.id, name)
+            if keys:
+                # Compléter pubkeys si absentes
+                box_sk_hex = keys["box_sk_hex"]
+                box_pk_hex = keys.get("box_pk_hex")
+                sign_sk_hex = keys["sign_sk_hex"]
+                sign_pk_hex = keys.get("sign_pk_hex")
+
+                if not box_pk_hex:
+                    box_pk_hex = PrivateKey(box_sk_hex, encoder=HexEncoder).public_key.encode(encoder=HexEncoder).decode()
+                if not sign_pk_hex:
+                    sign_pk_hex = SigningKey(bytes.fromhex(sign_sk_hex)).verify_key.encode().hex()
+
+                self.ident_store.replace_keys(
+                    idn.id,
+                    box_sk_hex=box_sk_hex,
+                    box_pk_hex=box_pk_hex,
+                    sign_sk_hex=sign_sk_hex,
+                    sign_pk_hex=sign_pk_hex
+                )
+                if self.on_changed:
+                    updated = [x for x in self.ident_store.list() if x.id == idn.id][0]
+                    self.on_changed(updated)
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror(self.tr("identities.title"), str(e))
 
     def _rename(self):
-        sel = self.lb.curselection()
-        if not sel: return
-        idn = self.ident_store.list()[sel[0]]
+        idn = self._current()
+        if not idn: return
         dlg = IdentityDialog(self, self.tr, "identities.title", initial_name=idn.name)
         self.wait_window(dlg)
         if dlg.result:
-            self.ident_store.rename(idn.id, dlg.result)
+            self.ident_store.rename(idn.id, dlg.result["name"])
             self._refresh()
 
     def _delete(self):
-        sel = self.lb.curselection()
-        if not sel: return
-        idn = self.ident_store.list()[sel[0]]
+        idn = self._current()
+        if not idn: return
         if messagebox.askyesno(self.tr("identities.title"), self.tr("confirm.delete_identity", name=idn.name)):
             self.ident_store.delete(idn.id)
             self._refresh()
 
 class ContactsManager(tk.Toplevel):
+    """Fenêtre de gestion des contacts."""
     def __init__(self, parent, contacts_store, identities_store, tr: Callable[[str], str]):
         super().__init__(parent)
         self.contacts = contacts_store
@@ -395,7 +582,6 @@ class SelectContactDialog(tk.Toplevel):
         for c in self.contacts.items():
             idn = self.ident_store.identities.get(c["identity_id"])
             name = c["name"]; ident = idn.name if idn else "?"
-            label = f"{name} (via {ident}) · {c['pub_hex']:{''}}"
             label = f"{name} (via {ident}) · {c['pub_hex'][:10]}…{c['pub_hex'][-8:]}"
             if not query or query in label.lower():
                 self.lb.insert(tk.END, label)

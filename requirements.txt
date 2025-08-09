@@ -1,6 +1,5 @@
 requests
 pycryptodome
 pynacl
-tkinter
 fastapi
 uvicorn

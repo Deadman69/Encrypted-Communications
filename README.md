@@ -35,17 +35,6 @@ Ensure you have **Python 3.x** installed on your system. You will also need to i
    pip install -r requirements.txt
    ```
 
-The `requirements.txt` file contains the following libraries:
-
-```
-requests
-pycryptodome
-pynacl
-tkinter
-fastapi
-uvicorn
-```
-
 ---
 
 ## Running the Application

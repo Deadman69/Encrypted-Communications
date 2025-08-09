@@ -1,163 +1,342 @@
 # Encrypted Messaging App
 
-This application allows for secure communication using **end-to-end encryption** through the **NaCl** algorithm with the use of public and private keys. The application consists of two main parts: the server and the client.
+A minimal, privacy-first messaging system with **end-to-end encryption**, **sealed-sender-style anonymous submission**, and a simple **Tkinter** desktop client.
 
-## Overview
-
-The application uses a simple architecture with a server that stores encrypted messages and a client that allows users to send and receive messages securely.
-
-### Features:
-
-* **End-to-end encryption**: Messages are encrypted on the client-side using the recipient's public key and are decrypted only on their device with their private key.
-* **Secure Mode**: Messages are deleted after being read to ensure confidentiality.
-* **User Interface (UI)**: The application features a graphical user interface (GUI) built with Tkinter, which allows users to start conversations, send messages, and interact with the server.
+* Payloads (text/files + metadata) are **signed** (Ed25519) and **encrypted** (NaCl SealedBox / X25519).
+* The server only sees: **recipient public key**, ciphertext, timestamps, and PoW nonce — **not** the sender identity.
+* Multiple identities per client; each contact is bound to a chosen identity.
+* Optional **Secure Mode** for “leave no trace” sessions.
 
 ---
 
-## Installation
+## Table of Contents
 
-### Prerequisites
-
-Ensure you have **Python 3.x** installed on your system. You will also need to install a few Python libraries, which can be found in the `requirements.txt` file.
-
-### Dependencies
-
-1. Clone or download the repository.
-2. Create and activate a virtual environment:
-
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows, use 'venv\Scripts\activate'
-   ```
-3. Install the required dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
+- [Encrypted Messaging App](#encrypted-messaging-app)
+   * [Table of Contents](#table-of-contents)
+   * [Features](#features)
+   * [How it works (TL;DR)](#how-it-works-tldr)
+   * [Repository Layout](#repository-layout)
+   * [Requirements](#requirements)
+   * [Quick Start](#quick-start)
+      + [1) Start the server](#1-start-the-server)
+      + [2) Start the client](#2-start-the-client)
+   * [Usage](#usage)
+   * [Local Persistence (when not in secure mode)](#local-persistence-when-not-in-secure-mode)
+   * [API (short)](#api-short)
+   * [Screenshots](#screenshots)
+   * [Build binaries with PyInstaller](#build-binaries-with-pyinstaller)
+      + [Client (Windows)](#client-windows)
+      + [Client (macOS/Linux)](#client-macoslinux)
+      + [Server](#server)
+   * [Troubleshooting](#troubleshooting)
+   * [License](#license)
+   * [Credits](#credits)
 
 ---
 
-## Running the Application
+## Features
 
-### 1. **Start the Server**
+* **End-to-end encryption**
 
-The server stores encrypted messages and handles requests to send and retrieve messages.
+  * Client signs payloads with **Ed25519** and encrypts with **NaCl SealedBox (X25519)**.
+  * Files/images and metadata (filename, MIME, type, timestamps) are encrypted too.
 
-Run the following command to start the server:
+* **Sealed-sender (light)**
+
+  * `/put` is **anonymous** (no auth headers).
+  * Server does not learn who sent the message; it only knows the recipient mailbox.
+
+* **Proof-of-Work (anti-abuse)**
+
+  * Lightweight PoW on `/put` (leading-zero SHA-256). Mined in a background thread.
+
+* **Multiple identities**
+
+  * Create/manage several identities, each with its own Ed25519/X25519 keys.
+  * Contacts are bound to the identity you’ll use to talk to them.
+
+* **Conversations & files**
+
+  * Send text, files, and images.
+  * **Async sending** with UI that stays responsive.
+  * Per-message status: **⌛ Sending… / ✓ Sent / ✗ Failed**.
+
+* **Better conversations list**
+
+  * **Unread badge** (e.g., `•3`) per conversation in the sidebar.
+  * Conversations are **restored on restart** (when not in Secure Mode).
+
+* **Contact quality of life**
+
+  * **Improved contact picker** (search + double-click).
+  * **“Add contact”** button appears when you chat with an **unknown** public key (not shown if already saved).
+
+* **Internationalization (i18n)**
+
+  * Live language switch (French/English) via menu.
+  * Language files in `client/langs/` (`fr.json`, `en.json`).
+
+* **Secure Mode (leave no trace)**
+
+  * When **enabled**:
+
+    * On activation and on next start, all local data (identities, contacts, conversations, local vault) are **purged**.
+    * On **exit**, you’re warned and the same purge happens before closing.
+    * Client still ACKs and can request server deletion after delivery.
+  * When **disabled**:
+
+    * The client keeps an **encrypted local vault** of conversations for fast restore at startup.
+
+---
+
+## How it works (TL;DR)
+
+* **Server knows**: recipient box public key (routing), ciphertext, timestamps, PoW nonce.
+* **Server verifies**: PoW for `/put`; signed headers for `/get`/`/ack`/`/delete`.
+* **Client verifies**: sender’s payload signature (Ed25519) inside the ciphertext.
+* For stronger network-level privacy, run the client over **Tor/VPN**.
+
+---
+
+## Repository Layout
+
+```
+server/
+  app.py           # FastAPI app + endpoints
+  config_db.py     # config loader + SQLite + schema
+  security.py      # signature/Pow checks
+  schemas.py       # Pydantic models
+
+client/
+  app.py           # app logic + Tk UI
+  security.py      # crypto helpers, signed HTTP, PoW
+  interface.py     # i18n + dialogs (Contacts, Identities, Contact picker)
+  langs/
+    fr.json
+    en.json
+
+docs/
+  img/             # screenshots for README
+```
+
+---
+
+## Requirements
+
+* **Python 3.10+**
+* Install deps:
+
+```bash
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+> Tkinter and sqlite3 ship with most Python builds.
+
+---
+
+## Quick Start
+
+### 1) Start the server
 
 ```bash
 cd server
-py ./server.py
+python app.py
+# default http://localhost:8000
 ```
 
-The server will run on `http://localhost:8000` by default. Ensure that the server is running properly before starting the client.
+`server/config.json` is created on first run:
 
-### 2. **Start the Client**
+```json
+{
+  "database": "messages.db",
+  "port": 8000,
+  "host": "0.0.0.0",
+  "pow_difficulty": 5,
+  "pow_window_secs": 120
+}
+```
 
-The client allows you to send and receive encrypted messages. Run the following command to start the client:
+### 2) Start the client
 
 ```bash
 cd client
-py ./client.py
+python app.py
 ```
 
-The client will open a graphical window. You can enter messages, select a recipient by entering the recipient's public key, and send encrypted messages.
+`client/config.json` is created on first run:
+
+```json
+{
+  "server_url": "http://localhost:8000",
+  "polling_interval": 5,
+  "language": "en",
+  "secure_mode": false
+}
+```
 
 ---
 
 ## Usage
 
-### **Public and Private Keys**
+1. **Identities**
+   Use **Identities** to add/rename/delete identities. The client auto-registers each identity to the server (`/register`) so it can fetch its mailbox.
 
-Encryption relies on **Ed25519** key pairs. Each user must have a pair of keys (private and public). If you don't already have keys, the application will generate a pair of keys for you the first time you run it, and save them in the `keys.json` file.
+2. **Contacts**
+   In **Contacts**, add the contact name and their **box public key (hex)**, and pick which **identity** you’ll use.
 
-* **Public key**: Used to encrypt messages. Every user should share their public key with others.
-* **Private key**: Used to decrypt received messages. The private key should never be shared.
+   * If someone messages you first and you haven’t saved them, an **“Add contact”** button appears in the header; click it to save them.
 
-### **Secure Mode**
+3. **Conversations**
+   Click **New** and select a contact. Send text or attach files/images.
 
-In **Secure Mode**, messages are automatically deleted after they are read. This mode guarantees that no sensitive data is left on the client after the conversation.
+   * Messages are sent **asynchronously**; UI shows **Sending / Sent / Failed** state.
+   * Use **Actions → Refresh now** to force a fetch immediately. Otherwise, the client polls automatically.
 
-1. **Classic Mode**: Messages are retained after they are read.
-2. **Secure Mode**: Messages are automatically deleted after they are read.
+4. **Secure Mode**
+   Toggle **Secure mode** in the left pane.
 
-To activate Secure Mode, select it in the client application.
+   * When enabling, you’ll be warned; the client **purges** identities, contacts, and local conversations vault immediately.
+   * On **startup** while secure mode is enabled, the client also ensures everything is purged.
+   * On **exit** while secure mode is enabled, you’ll get an additional confirmation; if you proceed, everything is purged again.
+   * When secure mode is **off**, the client keeps an **encrypted local vault** so conversations re-open with unread badges next time.
 
 ---
 
-## Configuration
+## Local Persistence (when not in secure mode)
 
-The configuration of the application is managed through the `config.json` file. You can configure parameters such as the server URL, polling interval, and language of the interface.
+* File: `client/conversations.vault` (encrypted with **libsodium SecretBox**).
+* Key: `client/vault.key` (32 random bytes generated once).
+* Stored data: conversations (including files/images as base64), unread counters, and last selected conversation.
+* If you lose `vault.key`, the vault cannot be decrypted.
 
-Example `config.json`:
+> In Secure Mode, both files are continuously **deleted** (on enable, on start, on exit).
 
-```json
-{
-    "server_url": "http://localhost:8000",
-    "polling_interval": 5,
-    "language": "en"
-}
+---
+
+## API (short)
+
+* `GET /pow_salt` → `{ salt, difficulty, window_secs }`
+* `POST /register` *(signed)* → `{ box_pub }`
+* `POST /put` *(anonymous + PoW)*
+* `POST /get` *(signed)* → `{ recipient }`
+* `POST /ack` *(signed)* → `{ ids }`
+* `POST /delete` *(signed)* → `{ ids }`
+
+Signed endpoints require:
+
+```
+X-PubSign: <hex(Ed25519 verify key)>
+X-Timestamp: <unix seconds>
+X-Signature: <hex( Sign( f"{ts}.{sha256(body)}" ) )>
 ```
 
-### Languages
+---
 
-The app supports multiple languages. The default translation file is in English (`en.json`), but you can easily add other languages by creating a new JSON file in the `lang/` folder.
+## Screenshots
 
-Example `en.json` file:
+<details>
+  <summary>Toggle screenshots</summary>
 
-```json
-{
-    "select_mode": "Select a mode",
-    "mode_classic": "Classic Mode",
-    "mode_secure": "Secure Mode",
-    "new_conversation": "New Conversation",
-    "manual_poll": "Poll Manually",
-    "server_online": "Server: Online",
-    "server_offline": "Server: Offline",
-    "error_no_conversation": "No active conversation.",
-    "error_server": "Server error"
-}
+![Main Window](docs/img/main.png)
+![Contacts](docs/img/identities.png)
+![Identities](docs/img/contact.png)
+![Conversation](docs/img/messages.png)
+
+</details>
+
+---
+
+## Build binaries with PyInstaller
+
+> Run these from the **target folder** (`client/` or `server/`).
+> On **Windows**, `--add-data` uses `;`. On **macOS/Linux**, use `:`.
+
+### Client (Windows)
+
+**One-file (recommended):**
+
+```powershell
+pyinstaller --clean --noconfirm ^
+  --onefile ^
+  --noconsole ^
+  --name EncryptedClient ^
+  --add-data "langs;langs" ^
+  app.py
 ```
 
-You can change the language via a dropdown menu in the client application.
+**One-dir (portable folder):**
+
+```powershell
+pyinstaller --clean --noconfirm ^
+  --onedir ^
+  --noconsole ^
+  --name EncryptedClient ^
+  --add-data "langs;langs" ^
+  app.py
+```
+
+**If PyInstaller misses modules, add:**
+
+```powershell
+--hidden-import "nacl.signing" --hidden-import "nacl.public" --hidden-import "nacl.bindings" --hidden-import "PIL._imaging"
+```
+
+### Client (macOS/Linux)
+
+Replace `--add-data "langs;langs"` with:
+
+```
+--add-data "langs:langs"
+```
+
+### Server
+
+```powershell
+# Windows
+pyinstaller --clean --noconfirm --onefile --name EncryptedServer app.py
+```
+
+```bash
+# macOS/Linux
+pyinstaller --clean --noconfirm --onefile --name EncryptedServer app.py
+```
+
+**Artifacts:**
+
+* onefile: `dist/EncryptedClient(.exe)`, `dist/EncryptedServer(.exe)`
+* onedir: `dist/EncryptedClient/EncryptedClient(.exe)`
+
+**Runtime data locations**
+
+* Client writes `config.json`, `identities.json`, `contacts.json`, and (when not in secure mode) `conversations.vault` + `vault.key` in the **current working directory**.
+* Server creates `messages.db` beside `server/app.py` (or in the working directory when packaged).
 
 ---
 
 ## Troubleshooting
 
-If you encounter issues, check the following:
-
-* Ensure that the server is running before launching the client.
-* Make sure you have generated a key pair for each user and that you are correctly sharing the public keys.
-* If the server is offline, you will see the message "Server: Offline" in the client interface.
-
-### **Common Errors**:
-
-* **Server error**: This error occurs when there is an issue connecting to the server (server offline or network issue).
-* **No active conversation**: You need to start a conversation with a contact before sending messages.
-
----
-
-## Security
-
-The application uses **NaCl (Ed25519)** encryption to ensure that only the recipient of a message can decrypt it. All communications between the client and server are encrypted, and messages are stored in an encrypted form on the server.
-
-In **Secure Mode**, messages are automatically deleted from the client after being read, adding an extra layer of security.
-
----
-
-## Authors
-
-This project was developed by \[Your Name]. You can contact me via \[your email address].
+* **Client freezes when sending large files** → fixed by moving encryption/PoW/network to a background thread; ensure you’re running a recent build.
+* **“Server: offline”** → verify server is running and `client/config.json` points to it.
+* **PoW too slow** → lower `pow_difficulty` in `server/config.json`.
+* **No languages in packaged client** → make sure `--add-data "langs;langs"` (or `langs:langs` on macOS/Linux) is present.
+* **Vault errors** → check write permissions in the working dir; deleting `conversations.vault` + `vault.key` resets local history (only when not in secure mode).
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+**AGPL-3.0-or-later** — see [LICENSE](./LICENSE).
 
 ---
 
-### Note:
+## Credits
 
-The **Secure Mode** is designed for use cases where maximum confidentiality is required. However, it's important to understand the limitations of deleted messages and their local storage.
+* Cryptography: **PyNaCl** (NaCl primitives: Ed25519, X25519/SealedBox)
+* Web: **FastAPI** + Uvicorn
+* UI: **Tkinter** + **Pillow**

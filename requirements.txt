@@ -3,3 +3,4 @@ pycryptodome
 pynacl
 fastapi
 uvicorn
+pillow

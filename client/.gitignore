@@ -1,2 +1,7 @@
+__pycache__/
 config.json
 keys.json
+contacts.json
+identities.json
+conversations.vault
+vault.key

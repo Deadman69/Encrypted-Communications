@@ -896,26 +896,25 @@ class MessengerApp:
 
     # ----- add contact from current -----
     def _add_contact_from_current(self):
-        if not self.current_conv: return
+        if not self.current_conv:
+            return
         conv = self.current_conv
         if self.contacts.find_by_pub(conv.contact_pub_hex):
-            self._update_add_contact_button(); return
+            self._update_add_contact_button()
+            return
         idents = self.ident_store.list()
-        ident_default = conv.identity_id
-        dlg = ContactDialog(self.root, idents, self.tr,
-                            "contact.title.new", name="", key=conv.contact_pub_hex,
-                            identity_id=ident_default, allow_new_identity=True)
+        ident_default = conv.identity_id  # identity that received the message
+
+        # No new identity allowed here; lock identity to ident_default
+        dlg = ContactDialog(
+            self.root, idents, self.tr,
+            "contact.title.new", name="", key=conv.contact_pub_hex,
+            identity_id=ident_default, allow_new_identity=False, fixed_identity_id=ident_default
+        )
         self.root.wait_window(dlg)
         if dlg.result:
             name, key, ident_id, extra = dlg.result
-            if extra and extra.get("create_new"):
-                idn = self.ident_store.add(extra["new_name"])
-                try:
-                    url = self.cfg["server_url"].rstrip("/") + "/register"
-                    signed_post(self.http, url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
-                except Exception as e:
-                    print("Register failed:", e)
-                ident_id = idn.id
+            # 'extra' cannot request a new identity in this flow
             self.contacts.add(name, key, ident_id)
             conv.contact_name = name
             self._refresh_conv_sidebar(select_key=(conv.identity_id, conv.contact_pub_hex))

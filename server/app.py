@@ -1,15 +1,47 @@
 from fastapi import FastAPI, HTTPException, Request
-from typing import List
-import time
+from typing import List, AsyncIterator
+from contextlib import asynccontextmanager
+import asyncio, logging, time
 
-from config_db import ensure_schema, connect, HOST, PORT, POW_DIFF, POW_WIN
+from config_db import ensure_schema, connect, HOST, PORT, POW_DIFF, POW_WIN, AUTO_CLEAN_TIMER
 from security import (
-    read_body, verify_signature_headers, require_known_user, check_pow
+    read_body, verify_signature_headers, require_known_user
 )
-from schemas import RegisterIn, PutIn, GetIn, AckIn, DeleteIn
+from schemas import RegisterIn, PutIn, GetIn
 
-app = FastAPI(title="Encrypted Messaging Server", version="4.0")
-ensure_schema()
+# ---------- Lifespan (startup/shutdown) ----------
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    ensure_schema()
+    stop_event = asyncio.Event()
+
+    async def cleaner():
+        logger = logging.getLogger("cleanup")
+        while not stop_event.is_set():
+            try:
+                now = int(time.time())
+                conn = connect(); cur = conn.cursor()
+                cur.execute("DELETE FROM messages WHERE expiration_time < ?", (now,))
+                conn.commit(); conn.close()
+            except Exception as e:
+                logger.warning("cleanup error: %s", e)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=AUTO_CLEAN_TIMER)
+            except asyncio.TimeoutError:
+                pass
+
+    task = asyncio.create_task(cleaner())
+    try:
+        yield
+    finally:
+        stop_event.set()
+        task.cancel()
+        try:
+            await task
+        except Exception:
+            pass
+
+app = FastAPI(title="Encrypted Messaging Server", version="4.0", lifespan=lifespan)
 
 # ---------- Endpoints ----------
 @app.get("/health")
@@ -50,9 +82,9 @@ async def register(request: Request, payload: RegisterIn):
     except Exception as e:
         raise HTTPException(500, f"Server error: {e}")
 
-# /put anonyme (pas de headers d’auth)
 @app.post("/put/")
 def put_message(msg: PutIn):
+    from security import check_pow
     if not isinstance(msg.pow, dict) or "salt" not in msg.pow or "nonce" not in msg.pow:
         raise HTTPException(400, "Missing PoW")
     if not check_pow(msg.pow["salt"], msg.pow["nonce"], msg.cipher_hex):
@@ -84,63 +116,26 @@ async def get_messages(request: Request, q: GetIn):
         now = int(time.time())
         conn = connect(); cur = conn.cursor()
 
-        # Delete and return in one request
+        # Get & delete in the same request
         cur.execute("""
             DELETE FROM messages
-             WHERE recipient=? AND expiration_time>? 
-             RETURNING id, cipher_hex, created_at, expiration_time
+             WHERE recipient=? AND expiration_time>?
+             RETURNING id, cipher_hex, expiration_time
         """, (q.recipient, now))
         rows = cur.fetchall()
         conn.commit(); conn.close()
 
-        msgs = [{"id": r[0], "cipher_hex": r[1], "created_at": r[2], "expiration_time": r[3]} for r in rows]
+        msgs = [{"id": r[0], "cipher_hex": r[1], "expiration_time": r[2]} for r in rows]
         return {"messages": msgs}
-    except Exception as e:
-        raise HTTPException(500, f"Server error: {e}")
-
-@app.post("/ack/")
-async def ack_messages(request: Request, req: AckIn):
-    body = await read_body(request)
-    sign_pub = request.headers.get("X-PubSign","")
-    ts = request.headers.get("X-Timestamp","")
-    sig = request.headers.get("X-Signature","")
-    verify_signature_headers(sign_pub, ts, sig, body)
-    recipient = require_known_user(sign_pub)
-    if not req.ids:
-        return {"updated": 0}
-    try:
-        now = int(time.time())
-        conn = connect(); cur = conn.cursor()
-        placeholders = ",".join("?"*len(req.ids))
-        cur.execute(f"UPDATE messages SET delivered_at=? WHERE recipient=? AND id IN ({placeholders})",
-                    (now, recipient, *req.ids))
-        n = cur.rowcount
-        conn.commit(); conn.close()
-        return {"updated": n}
-    except Exception as e:
-        raise HTTPException(500, f"Server error: {e}")
-
-@app.post("/delete/")
-async def delete_messages(request: Request, req: DeleteIn):
-    body = await read_body(request)
-    sign_pub = request.headers.get("X-PubSign","")
-    ts = request.headers.get("X-Timestamp","")
-    sig = request.headers.get("X-Signature","")
-    verify_signature_headers(sign_pub, ts, sig, body)
-    recipient = require_known_user(sign_pub)
-    if not req.ids:
-        return {"deleted": 0}
-    try:
-        conn = connect(); cur = conn.cursor()
-        placeholders = ",".join("?"*len(req.ids))
-        cur.execute(f"DELETE FROM messages WHERE recipient=? AND id IN ({placeholders})",
-                    (recipient, *req.ids))
-        n = cur.rowcount
-        conn.commit(); conn.close()
-        return {"deleted": n}
     except Exception as e:
         raise HTTPException(500, f"Server error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(
+        app,
+        host=HOST,
+        port=PORT,
+        access_log=False,
+        log_level="warning"
+    )

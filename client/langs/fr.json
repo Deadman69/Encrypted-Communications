@@ -38,6 +38,9 @@
   "contact.name": "Nom",
   "contact.key": "Clé publique (hex)",
   "contact.identity": "Identité utilisée",
+  "contact.new_identity_recommended": "Créer une nouvelle identité (recommandé)",
+  "contact.choose_existing_advanced": "Choisir une identité existante (avancé)",
+  "contact.new_identity_name": "Nom de la nouvelle identité",
   "error.name_required": "Le nom est requis.",
   "error.invalid_pubkey": "Clé publique invalide.",
   "identities.title": "Identités",
@@ -63,5 +66,5 @@
   "secure.confirm.title": "Mode sécurisé",
   "secure.confirm.text": "Activer le mode sécurisé va supprimer TOUTES les données locales (identités, contacts, conversations). Continuer ?",
   "secure.exit.title": "Quitter – Mode sécurisé",
-  "secure.exit.text": "Vous êtes en mode sécurisé. En quittant, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?"
+  "secure.exit.text": "Vous êtes en mode sécurisé. On quitter, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?"
 }

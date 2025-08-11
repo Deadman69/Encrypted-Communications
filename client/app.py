@@ -1,4 +1,4 @@
-import sys, os, json, time, threading, random, mimetypes, base64, io, uuid, webbrowser, hashlib
+import sys, os, json, time, threading, random, mimetypes, base64, io, uuid, webbrowser, hashlib, binascii
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional, List, Dict, Tuple
@@ -54,7 +54,7 @@ def save_config(cfg):
     with open(CONFIG_FILE,"w", encoding="utf-8") as f:
         json.dump(cfg,f,indent=4, ensure_ascii=False)
 
-# =============== Modèles ===============
+# =============== Modèles (inchangé sauf génération/clés) ===============
 class Identity:
     def __init__(self, id_: str, name: str, box_sk_hex: str, box_pk_hex: str, sign_sk_hex: str, sign_pk_hex: str):
         self.id = id_
@@ -510,7 +510,14 @@ class MessengerApp:
                           on_changed=after_add_or_change)
 
     def _open_contacts_manager(self):
-        ContactsManager(self.root, self.contacts, self.ident_store, self.tr)
+        def after_id_added(idn):
+            try:
+                url = self.cfg["server_url"].rstrip("/") + "/register"
+                signed_post(url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
+            except Exception as e:
+                print("Register failed:", e)
+        ContactsManager(self.root, self.contacts, self.ident_store, self.tr,
+                        on_identity_added=after_id_added)
 
     # ----- Conversations -----
     def _refresh_conv_sidebar(self, select_key: Optional[Tuple[str,str]] = None):
@@ -887,6 +894,7 @@ class MessengerApp:
         def set_prog(p):
             item["progress"] = p
 
+        # encodage base64 "streaming" sûr (pas de padding intermédiaire)
         def b64encode_with_progress(buf: bytes, progress_cb, start=0.0, end=10.0):
             if not buf:
                 progress_cb(end); return ""
@@ -894,7 +902,7 @@ class MessengerApp:
             total = len(buf)
             out_parts = []
             done = 0
-            carry = b""
+            carry = b""  # 0..2 octets reportés pour garder des groupes de 3
 
             for i in range(0, total, chunk):
                 block = carry + buf[i:i+chunk]
@@ -906,10 +914,10 @@ class MessengerApp:
 
                 done += min(chunk, total - i)
                 frac = done / total
-                progress_cb(start + (end - start) * frac)
+                progress_cb(start + (end-start) * frac)
 
             if carry:
-                out_parts.append(base64.b64encode(carry))
+                out_parts.append(base64.b64encode(carry))  # padding final uniquement
 
             return b"".join(out_parts).decode("ascii")
 
@@ -952,10 +960,20 @@ class MessengerApp:
         idents = self.ident_store.list()
         ident_default = conv.identity_id
         dlg = ContactDialog(self.root, idents, self.tr,
-                            "contact.title.new", name="", key=conv.contact_pub_hex, identity_id=ident_default)
+                            "contact.title.new", name="", key=conv.contact_pub_hex,
+                            identity_id=ident_default, allow_new_identity=True)
         self.root.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id = dlg.result
+            name, key, ident_id, extra = dlg.result
+            if extra and extra.get("create_new"):
+                idn = self.ident_store.add(extra["new_name"])
+                # enregistrer l'identité nouvellement créée
+                try:
+                    url = self.cfg["server_url"].rstrip("/") + "/register"
+                    signed_post(url, {"box_pub": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
+                except Exception as e:
+                    print("Register failed:", e)
+                ident_id = idn.id
             self.contacts.add(name, key, ident_id)
             conv.contact_name = name
             self._refresh_conv_sidebar(select_key=(conv.identity_id, conv.contact_pub_hex))
@@ -1000,8 +1018,6 @@ class MessengerApp:
         r = signed_post(url, {"recipient": idn.box_pub_hex}, idn.sign_sk, idn.sign_pub_hex)
         if r.status_code != 200: raise RuntimeError("Server unavailable")
         data = r.json()
-        ids_to_ack = []
-        ids_to_delete = []
 
         updated = False
 
@@ -1011,7 +1027,6 @@ class MessengerApp:
                 continue
             self._seen_ids.add(mid)
             cipher_hex = msg["cipher_hex"]
-            created_ts = msg.get("created_at", int(time.time()))
             try:
                 pt_bytes = decrypt_with(idn.box_sk, cipher_hex)
                 payload = json.loads(pt_bytes.decode())
@@ -1029,6 +1044,7 @@ class MessengerApp:
 
             kind = payload.get("t")
             sender_box_pub = payload.get("sender_box_pub","")
+            signed_ts = int(payload.get("ts") or time.time())
             contact = self.contacts.find_by_pub(sender_box_pub)
             contact_name = contact["name"] if contact else self.tr("unknown.contact", prefix=sender_box_pub[:6])
 
@@ -1038,38 +1054,26 @@ class MessengerApp:
                 self.conversations[key] = conv
             conv = self.conversations[key]
 
-            if kind == "text":
-                text = payload.get("text","")
-                conv.messages.append({"direction":"in","kind":"text","text":text,"ts":created_ts})
-            elif kind == "image":
-                raw = base64.b64decode(payload.get("data_b64",""), validate=True)
-                conv.messages.append({"direction":"in","kind":"image","data":raw,"filename":payload.get("filename"),"ts":created_ts})
-            else:
-                raw = base64.b64decode(payload.get("data_b64",""), validate=True)
-                conv.messages.append({"direction":"in","kind":"file","data":raw,"filename":payload.get("filename"),"ts":created_ts})
+            try:
+                if kind == "text":
+                    text = payload.get("text","")
+                    conv.messages.append({"direction":"in","kind":"text","text":text,"ts":signed_ts})
+                elif kind == "image":
+                    raw = base64.b64decode(payload.get("data_b64",""), validate=True)
+                    conv.messages.append({"direction":"in","kind":"image","data":raw,"filename":payload.get("filename"),"ts":signed_ts})
+                else:
+                    raw = base64.b64decode(payload.get("data_b64",""), validate=True)
+                    conv.messages.append({"direction":"in","kind":"file","data":raw,"filename":payload.get("filename"),"ts":signed_ts})
+            except binascii.Error:
+                # base64 invalide : on ignore ce message
+                continue
 
             if self.current_conv is None or conv is not self.current_conv:
                 conv.unread += 1
 
-            ids_to_ack.append(mid)
-            if self.secure_var.get():
-                ids_to_delete.append(mid)
-
             updated = True
 
-        if ids_to_ack:
-            try:
-                url_ack = self.cfg["server_url"].rstrip("/") + "/ack/"
-                signed_post(url_ack, {"ids": ids_to_ack}, idn.sign_sk, idn.sign_pub_hex)
-            except Exception:
-                pass
-
-        if ids_to_delete:
-            try:
-                url_del = self.cfg["server_url"].rstrip("/") + "/delete/"
-                signed_post(url_del, {"ids": ids_to_delete}, idn.sign_sk, idn.sign_pub_hex)
-            except Exception:
-                pass
+        # plus de /ack ni /delete : les messages ont été supprimés côté serveur au GET
 
         if updated:
             self._refresh_conv_sidebar(select_key=self._current_key)

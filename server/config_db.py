@@ -1,5 +1,8 @@
 import os, json, sqlite3
 
+if tuple(map(int, sqlite3.sqlite_version.split("."))) < (3, 35, 0):
+    raise RuntimeError("SQLite >= 3.35.0 is required for DELETE ... RETURNING, please upgrade your SQLite version")
+
 CONFIG_FILE = "config.json"
 
 def load_config():
@@ -9,7 +12,8 @@ def load_config():
             "port": 8000,
             "host": "0.0.0.0",
             "pow_difficulty": 5,   # ~20 bits
-            "pow_window_secs": 120
+            "pow_window_secs": 120,
+            "auto_clean_timer": 60
         }
         with open(CONFIG_FILE, "w") as f: json.dump(cfg, f, indent=4)
         return cfg
@@ -23,6 +27,7 @@ PORT     = config["port"]
 HOST     = config["host"]
 POW_DIFF = int(config.get("pow_difficulty", 5))
 POW_WIN  = int(config.get("pow_window_secs", 120))
+AUTO_CLEAN_TIMER  = int(config.get("auto_clean_timer", 120))
 
 def connect():
     conn = sqlite3.connect(DATABASE, check_same_thread=False)

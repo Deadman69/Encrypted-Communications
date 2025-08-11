@@ -65,6 +65,11 @@ class I18n:
             "contact.name": "Nom",
             "contact.key": "Clé publique (hex)",
             "contact.identity": "Identité utilisée",
+
+            "contact.new_identity_recommended": "Créer une nouvelle identité (recommandé)",
+            "contact.choose_existing_advanced": "Choisir une identité existante (avancé)",
+            "contact.new_identity_name": "Nom de la nouvelle identité",
+
             "error.name_required": "Le nom est requis.",
             "error.invalid_pubkey": "Clé publique invalide.",
 
@@ -76,7 +81,6 @@ class I18n:
             "btn.delete": "Supprimer",
             "btn.close": "Fermer",
 
-            # Nouvelles clés i18n
             "btn.copy_my_pub": "Copier ma clé publique",
             "msg.copied": "Copié dans le presse-papiers",
             "adv.toggle": "Mode avancé",
@@ -145,6 +149,11 @@ class I18n:
             "contact.name": "Name",
             "contact.key": "Public key (hex)",
             "contact.identity": "Using identity",
+
+            "contact.new_identity_recommended": "Create a new identity (recommended)",
+            "contact.choose_existing_advanced": "Choose an existing identity (advanced)",
+            "contact.new_identity_name": "New identity name",
+
             "error.name_required": "Name is required.",
             "error.invalid_pubkey": "Invalid public key.",
 
@@ -156,7 +165,6 @@ class I18n:
             "btn.delete": "Delete",
             "btn.close": "Close",
 
-            # New keys
             "btn.copy_my_pub": "Copy my public key",
             "msg.copied": "Copied to clipboard",
             "adv.toggle": "Advanced mode",
@@ -210,7 +218,9 @@ class I18n:
 
 # ================== Dialogs ==================
 class ContactDialog(tk.Toplevel):
-    def __init__(self, parent, identities: List, tr: Callable[[str], str], title_key="contact.title.new", name="", key="", identity_id=None):
+    def __init__(self, parent, identities: List, tr: Callable[[str], str],
+                 title_key="contact.title.new", name="", key="", identity_id=None,
+                 allow_new_identity: bool = False):
         super().__init__(parent)
         self.tr = tr
         self.title(tr(title_key)); self.resizable(False, False)
@@ -219,28 +229,54 @@ class ContactDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
-        ttk.Label(frm, text=tr("contact.name")).grid(row=0, column=0, sticky="w")
+        ttk.Label(frm, text=self.tr("contact.name")).grid(row=0, column=0, sticky="w")
         self.e_name = ttk.Entry(frm); self.e_name.grid(row=0, column=1, sticky="ew")
         self.e_name.insert(0, name)
 
-        ttk.Label(frm, text=tr("contact.key")).grid(row=1, column=0, sticky="w", pady=(6,0))
+        ttk.Label(frm, text=self.tr("contact.key")).grid(row=1, column=0, sticky="w", pady=(6,0))
         self.e_key = ttk.Entry(frm, width=70); self.e_key.grid(row=1, column=1, sticky="ew", pady=(6,0))
         self.e_key.insert(0, key)
 
-        ttk.Label(frm, text=tr("contact.identity")).grid(row=2, column=0, sticky="w", pady=(6,0))
+        # --- Choix identité (nouvelle par défaut) ---
+        self.choice = tk.StringVar(value=("new" if allow_new_identity else "existing"))
+        rb_new = ttk.Radiobutton(frm, text=self.tr("contact.new_identity_recommended"),
+                                 variable=self.choice, value="new")
+        rb_old = ttk.Radiobutton(frm, text=self.tr("contact.choose_existing_advanced"),
+                                 variable=self.choice, value="existing")
+        rb_new.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8,0))
+        rb_old.grid(row=3, column=0, columnspan=2, sticky="w")
+
+        # zone "nouvelle identité"
+        self.lbl_new = ttk.Label(frm, text=self.tr("contact.new_identity_name"))
+        self.e_new_ident = ttk.Entry(frm)
+        default_ident = (name or "Contact") + " – Identité"
+        self.e_new_ident.insert(0, default_ident)
+        self.lbl_new.grid(row=4, column=0, sticky="w", pady=(6,0))
+        self.e_new_ident.grid(row=4, column=1, sticky="ew", pady=(6,0))
+
+        # zone "existante"
+        ttk.Label(frm, text=self.tr("contact.identity")).grid(row=5, column=0, sticky="w", pady=(6,0))
         self.id_map = {idn.name: idn.id for idn in identities}
         names = list(self.id_map.keys()) or ["(none)"]
         self.cmb = ttk.Combobox(frm, values=names, state="readonly")
-        self.cmb.grid(row=2, column=1, sticky="ew", pady=(6,0))
+        self.cmb.grid(row=5, column=1, sticky="ew", pady=(6,0))
         if identity_id:
             name_default = next((n for n,i in self.id_map.items() if i==identity_id), names[0])
         else:
             name_default = names[0]
         self.cmb.set(name_default)
 
-        btns = ttk.Frame(frm); btns.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky="e")
-        ttk.Button(btns, text=tr("dlg.cancel"), command=self.destroy).pack(side="right")
-        ttk.Button(btns, text=tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
+        def _toggle():
+            is_new = (self.choice.get() == "new")
+            for w in (self.lbl_new, self.e_new_ident):
+                w.grid() if is_new else w.grid_remove()
+            self.cmb.grid() if not is_new else self.cmb.grid_remove()
+        _toggle()
+        self.choice.trace_add("write", lambda *_: _toggle())
+
+        btns = ttk.Frame(frm); btns.grid(row=6, column=0, columnspan=2, pady=(10,0), sticky="e")
+        ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
+        ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
 
         self.bind("<Return>", lambda _e: self._ok())
         self.grab_set(); self.e_name.focus_set()
@@ -254,9 +290,15 @@ class ContactDialog(tk.Toplevel):
             PublicKey(key, encoder=HexEncoder)
         except Exception:
             messagebox.showerror(self.tr("contact.title.new"), self.tr("error.invalid_pubkey")); return
-        id_name = self.cmb.get()
-        identity_id = self.id_map.get(id_name)
-        self.result = (name, key, identity_id); self.destroy()
+
+        if self.choice.get() == "new":
+            new_ident_name = self.e_new_ident.get().strip() or "Nouvelle identité"
+            self.result = (name, key, None, {"create_new": True, "new_name": new_ident_name})
+        else:
+            id_name = self.cmb.get()
+            identity_id = self.id_map.get(id_name)
+            self.result = (name, key, identity_id, None)
+        self.destroy()
 
 class IdentityDialog(tk.Toplevel):
     """
@@ -380,16 +422,21 @@ class IdentitiesManager(tk.Toplevel):
         self.title(self.tr("identities.title")); self.geometry("640x420")
         frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
         self.lb = tk.Listbox(frame, height=12); self.lb.pack(fill="both", expand=True)
+
+        # activer/désactiver selon la sélection
         self.lb.bind("<<ListboxSelect>>", lambda _e: self._update_buttons())
 
         btns = ttk.Frame(frame); btns.pack(fill="x", pady=(8,0))
         ttk.Button(btns, text=self.tr("btn.add"), command=self._add).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.rename"), command=self._rename).pack(side="left", padx=6)
         ttk.Button(btns, text=self.tr("btn.edit"), command=self._edit).pack(side="left")
-        self.btn_copy = ttk.Button(btns, text=self.tr("btn.copy_my_pub"), command=self._copy_my_pub, state="disabled")
+
+        self.btn_copy = ttk.Button(btns, text=self.tr("btn.copy_my_pub"),
+                                   command=self._copy_my_pub)
         self.btn_copy.pack(side="left", padx=6)
-        self.btn_delete = ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete, state="disabled")
-        self.btn_delete.pack(side="left")
+        self.btn_copy.config(state="disabled")
+
+        ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.close"), command=self.destroy).pack(side="right")
         self._refresh()
 
@@ -502,15 +549,16 @@ class IdentitiesManager(tk.Toplevel):
     def _update_buttons(self):
         has = bool(self.lb.curselection())
         self.btn_copy.config(state=("normal" if has else "disabled"))
-        self.btn_delete.config(state=("normal" if has else "disabled"))
 
 class ContactsManager(tk.Toplevel):
     """Fenêtre de gestion des contacts."""
-    def __init__(self, parent, contacts_store, identities_store, tr: Callable[[str], str]):
+    def __init__(self, parent, contacts_store, identities_store, tr: Callable[[str], str],
+                 on_identity_added: Optional[Callable] = None):
         super().__init__(parent)
         self.contacts = contacts_store
         self.ident_store = identities_store
         self.tr = tr
+        self.on_identity_added = on_identity_added
         self.title(self.tr("contacts.title")); self.geometry("640x420")
 
         frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
@@ -533,10 +581,16 @@ class ContactsManager(tk.Toplevel):
 
     def _add(self):
         idents = self.ident_store.list()
-        dlg = ContactDialog(self, idents, self.tr, "contact.title.new")
+        dlg = ContactDialog(self, idents, self.tr, "contact.title.new", allow_new_identity=True)
         self.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id = dlg.result
+            name, key, ident_id, extra = dlg.result
+            if extra and extra.get("create_new"):
+                idn = self.ident_store.add(extra["new_name"])
+                if self.on_identity_added:
+                    try: self.on_identity_added(idn)
+                    except Exception: pass
+                ident_id = idn.id
             self.contacts.add(name, key, ident_id); self._refresh()
 
     def _edit(self):
@@ -544,10 +598,11 @@ class ContactsManager(tk.Toplevel):
         if not sel: return
         idx = sel[0]; c = self.contacts.items()[idx]
         idents = self.ident_store.list()
-        dlg = ContactDialog(self, idents, self.tr, "contact.title.edit", name=c["name"], key=c["pub_hex"], identity_id=c["identity_id"])
+        dlg = ContactDialog(self, idents, self.tr, "contact.title.edit",
+                            name=c["name"], key=c["pub_hex"], identity_id=c["identity_id"], allow_new_identity=False)
         self.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id = dlg.result
+            name, key, ident_id, _extra = dlg.result
             self.contacts.update(idx, name, key, ident_id); self._refresh()
 
     def _delete(self):

@@ -130,7 +130,23 @@ class I18n:
             "pwd.weak": "Faible",
             "pwd.medium": "Moyenne",
             "pwd.strong": "Forte",
-            "pwd.vstrong": "Très forte"
+            "pwd.vstrong": "Très forte",
+
+            "contact.sign_key": "Clé publique de signature (hex)",
+
+            "exif.title": "Métadonnées EXIF",
+            "exif.keep": "Envoyer tel quel",
+            "exif.remove": "Supprimer les données EXIF",
+            "exif.cancel": "Annuler l’envoi",
+            "exif.none": "Aucune donnée EXIF détectée.",
+
+            "keychange.title": "Changement de clé de signature",
+            "keychange.text": "Le contact « {name} » a changé de clé de signature.\n\nAncienne : {old}\nNouvelle : {new}\n\nAccepter la nouvelle clé ?",
+            "keychange.accept": "Accepter",
+            "keychange.reject": "Rejeter",
+
+            "btn.copy_my_sign_pub": "Copier ma clé publique de signature",
+            "clipboard.cleared": "Presse-papiers nettoyé."
         }
         en = {
             "app.title": "Encrypted Messaging",
@@ -244,7 +260,23 @@ class I18n:
             "pwd.weak": "Weak",
             "pwd.medium": "Medium",
             "pwd.strong": "Strong",
-            "pwd.vstrong": "Very strong"
+            "pwd.vstrong": "Very strong",
+
+            "contact.sign_key": "Signing public key (hex)",
+
+            "exif.title": "EXIF metadata",
+            "exif.keep": "Send as-is",
+            "exif.remove": "Remove EXIF data",
+            "exif.cancel": "Cancel send",
+            "exif.none": "No EXIF data detected.",
+
+            "keychange.title": "Signing key change",
+            "keychange.text": "Contact “{name}” changed signing key.\n\nOld: {old}\nNew: {new}\n\nTrust the new key?",
+            "keychange.accept": "Accept",
+            "keychange.reject": "Reject",
+
+            "btn.copy_my_sign_pub": "Copy my signing public key",
+            "clipboard.cleared": "Clipboard cleared."
         }
         self._write_if_missing("fr.json", fr)
         self._write_if_missing("en.json", en)
@@ -348,41 +380,50 @@ class SettingsDialog(tk.Toplevel):
 # ================== Dialogs: Contact / Identity / Managers ==================
 class ContactDialog(tk.Toplevel):
     def __init__(self, parent, identities: List, tr: Callable[[str], str],
-                 title_key="contact.title.new", name="", key="", identity_id=None,
-                 allow_new_identity: bool = False, fixed_identity_id: Optional[str] = None):
+                 title_key="contact.title.new", name="", key="", sign_key="",
+                 identity_id=None, allow_new_identity: bool = False,
+                 fixed_identity_id: Optional[str] = None):
         super().__init__(parent)
         self.tr = tr
-        self.title(tr(title_key)); self.resizable(False, False)
+        self.title(tr(title_key))
+        self.resizable(False, False)
         self.result = None
 
-        frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
         ttk.Label(frm, text=self.tr("contact.name")).grid(row=0, column=0, sticky="w")
-        self.e_name = ttk.Entry(frm); self.e_name.grid(row=0, column=1, sticky="ew")
+        self.e_name = ttk.Entry(frm)
+        self.e_name.grid(row=0, column=1, sticky="ew")
         self.e_name.insert(0, name)
 
-        ttk.Label(frm, text=self.tr("contact.key")).grid(row=1, column=0, sticky="w", pady=(6,0))
-        self.e_key = ttk.Entry(frm, width=70); self.e_key.grid(row=1, column=1, sticky="ew", pady=(6,0))
+        ttk.Label(frm, text=self.tr("contact.key")).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.e_key = ttk.Entry(frm, width=70)
+        self.e_key.grid(row=1, column=1, sticky="ew", pady=(6, 0))
         self.e_key.insert(0, key)
+
+        ttk.Label(frm, text=self.tr("contact.sign_key")).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.e_sign = ttk.Entry(frm, width=70)
+        self.e_sign.grid(row=2, column=1, sticky="ew", pady=(6, 0))
+        self.e_sign.insert(0, sign_key)
 
         # Identity list
         self.id_map = {idn.name: idn.id for idn in identities}
         names = list(self.id_map.keys()) or ["(none)"]
 
-        # Choice (new/existing). If fixed_identity_id is set, force "existing".
+        # Choice new/existing. If fixed_identity_id is set, force existing.
         can_create_new = bool(allow_new_identity and not fixed_identity_id)
         self.choice = tk.StringVar(value=("new" if can_create_new else "existing"))
 
-        rb_row = 2
+        rb_row = 3
         if can_create_new:
             rb_new = ttk.Radiobutton(frm, text=self.tr("contact.new_identity_recommended"), variable=self.choice, value="new")
             rb_old = ttk.Radiobutton(frm, text=self.tr("contact.choose_existing_advanced"), variable=self.choice, value="existing")
-            rb_new.grid(row=rb_row, column=0, columnspan=2, sticky="w", pady=(8,0))
-            rb_old.grid(row=rb_row+1, column=0, columnspan=2, sticky="w")
+            rb_new.grid(row=rb_row, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            rb_old.grid(row=rb_row + 1, column=0, columnspan=2, sticky="w")
             next_row = rb_row + 2
         else:
-            # No "new" option visible when we must stick to an existing identity
             next_row = rb_row
 
         # "new identity" zone (hidden if not allowed)
@@ -391,69 +432,86 @@ class ContactDialog(tk.Toplevel):
         default_ident = (name or "Contact") + " – Identity"
         self.e_new_ident.insert(0, default_ident)
         if can_create_new:
-            self.lbl_new.grid(row=next_row, column=0, sticky="w", pady=(6,0))
-            self.e_new_ident.grid(row=next_row, column=1, sticky="ew", pady=(6,0))
+            self.lbl_new.grid(row=next_row, column=0, sticky="w", pady=(6, 0))
+            self.e_new_ident.grid(row=next_row, column=1, sticky="ew", pady=(6, 0))
             next_row += 1
 
         # "existing identity" zone
-        ttk.Label(frm, text=self.tr("contact.identity")).grid(row=next_row, column=0, sticky="w", pady=(6,0))
+        ttk.Label(frm, text=self.tr("contact.identity")).grid(row=next_row, column=0, sticky="w", pady=(6, 0))
         self.cmb = ttk.Combobox(frm, values=names, state="readonly")
-        self.cmb.grid(row=next_row, column=1, sticky="ew", pady=(6,0))
+        self.cmb.grid(row=next_row, column=1, sticky="ew", pady=(6, 0))
 
-        # Choose default identity in combo
         if fixed_identity_id:
-            name_default = next((n for n,i in self.id_map.items() if i==fixed_identity_id), names[0])
+            name_default = next((n for n, i in self.id_map.items() if i == fixed_identity_id), names[0])
         elif identity_id:
-            name_default = next((n for n,i in self.id_map.items() if i==identity_id), names[0])
+            name_default = next((n for n, i in self.id_map.items() if i == identity_id), names[0])
         else:
             name_default = names[0]
         self.cmb.set(name_default)
 
-        # If identity is fixed, lock the combobox
         if fixed_identity_id:
             self.cmb.configure(state="disabled")
 
-        # Toggle handler (only when "new" is allowed)
         def _toggle():
+            """Toggle between 'new identity' and 'existing' UI."""
             if not can_create_new:
                 return
             is_new = (self.choice.get() == "new")
             if is_new:
-                self.lbl_new.grid() ; self.e_new_ident.grid()
+                self.lbl_new.grid()
+                self.e_new_ident.grid()
                 self.cmb.grid_remove()
             else:
-                self.lbl_new.grid_remove() ; self.e_new_ident.grid_remove()
+                self.lbl_new.grid_remove()
+                self.e_new_ident.grid_remove()
                 self.cmb.grid()
         _toggle()
         if can_create_new:
             self.choice.trace_add("write", lambda *_: _toggle())
 
         # Buttons
-        btns = ttk.Frame(frm); btns.grid(row=next_row+1, column=0, columnspan=2, pady=(10,0), sticky="e")
+        btns = ttk.Frame(frm)
+        btns.grid(row=next_row + 1, column=0, columnspan=2, pady=(10, 0), sticky="e")
         ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
-        ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
+        ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0, 6))
 
         self.bind("<Return>", lambda _e: self._ok())
-        self.grab_set(); self.e_name.focus_set()
+        self.grab_set()
+        self.e_name.focus_set()
 
     def _ok(self):
+        """Validate inputs and return a tuple consistent with callers."""
         name = self.e_name.get().strip()
-        key  = self.e_key.get().strip()
+        key = self.e_key.get().strip()
+        sign = self.e_sign.get().strip()
+
         if not name:
-            messagebox.showerror(self.tr("contact.title.new"), self.tr("error.name_required")); return
+            messagebox.showerror(self.tr("contact.title.new"), self.tr("error.name_required"))
+            return
         try:
             PublicKey(key, encoder=HexEncoder)
         except Exception:
-            messagebox.showerror(self.tr("contact.title.new"), self.tr("error.invalid_pubkey")); return
+            messagebox.showerror(self.tr("contact.title.new"), self.tr("error.invalid_pubkey"))
+            return
 
+        def _is_hex_32(s):
+            try:
+                return s and len(s) == 64 and int(s, 16) >= 0
+            except Exception:
+                return False
+
+        if not _is_hex_32(sign):
+            messagebox.showerror(self.tr("contact.title.new"), self.tr("error.invalid_pubkey"))
+            return
+
+        # New identity branch (only when allowed & visible)
         if hasattr(self, "lbl_new") and self.lbl_new.winfo_ismapped() and self.cmb.winfo_ismapped() == 0:
-            # New identity branch (only when allowed & visible)
             new_ident_name = self.e_new_ident.get().strip() or "New identity"
-            self.result = (name, key, None, {"create_new": True, "new_name": new_ident_name})
+            self.result = (name, key, sign, None, {"create_new": True, "new_name": new_ident_name})
         else:
             id_name = self.cmb.get()
             identity_id = self.id_map.get(id_name)
-            self.result = (name, key, identity_id, None)
+            self.result = (name, key, sign, identity_id, None)
         self.destroy()
 
 class IdentityDialog(tk.Toplevel):
@@ -563,25 +621,40 @@ class IdentitiesManager(tk.Toplevel):
         self.on_added = on_added
         self.on_changed = on_changed
 
-        self.title(self.tr("identities.title")); self.geometry("640x420")
-        frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
-        self.lb = tk.Listbox(frame, height=12); self.lb.pack(fill="both", expand=True)
+        self.title(self.tr("identities.title"))
+        self.geometry("640x420")
+        frame = ttk.Frame(self, padding=8)
+        frame.pack(fill="both", expand=True)
+        self.lb = tk.Listbox(frame, height=12)
+        self.lb.pack(fill="both", expand=True)
         self.lb.bind("<<ListboxSelect>>", lambda _e: self._update_buttons())
 
-        btns = ttk.Frame(frame); btns.pack(fill="x", pady=(8,0))
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(8, 0))
+
         ttk.Button(btns, text=self.tr("btn.add"), command=self._add).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.rename"), command=self._rename).pack(side="left", padx=6)
+
         self.btn_edit = ttk.Button(btns, text=self.tr("btn.edit"), command=self._edit, state="disabled")
         self.btn_edit.pack(side="left")
 
-        self.btn_copy = ttk.Button(btns, text=self.tr("btn.copy_my_pub"),
-                                   command=self._copy_my_pub, state="disabled")
-        self.btn_copy.pack(side="left", padx=6)
+        self.btn_copy_enc = ttk.Button(
+            btns, text=self.tr("btn.copy_my_pub"),
+            command=self._copy_my_pub, state="disabled"
+        )
+        self.btn_copy_enc.pack(side="left", padx=6)
+
+        self.btn_copy_sign = ttk.Button(
+            btns, text=self.tr("btn.copy_my_sign_pub"),
+            command=self._copy_my_sign_pub, state="disabled"
+        )
+        self.btn_copy_sign.pack(side="left")
 
         self.btn_delete = ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete, state="disabled")
-        self.btn_delete.pack(side="left")
+        self.btn_delete.pack(side="left", padx=6)
 
         ttk.Button(btns, text=self.tr("btn.close"), command=self.destroy).pack(side="right")
+
         self._refresh()
 
     def _refresh(self):
@@ -598,13 +671,63 @@ class IdentitiesManager(tk.Toplevel):
         return self.ident_store.list()[sel[0]]
 
     def _copy_my_pub(self):
+        """Copy pubkey and schedule a conditional clipboard wipe after 30s."""
         idn = self._current()
-        if not idn: return
+        if not idn:
+            return
         try:
             self.clipboard_clear()
             self.clipboard_append(idn.box_pub_hex)
             self.update()
             messagebox.showinfo(self.tr("identities.title"), self.tr("msg.copied"))
+
+            copied = idn.box_pub_hex
+
+            def _wipe_if_same():
+                """Clear clipboard only if still unchanged to avoid clobbering user content."""
+                try:
+                    current = self.clipboard_get()
+                except Exception:
+                    return
+                if current == copied:
+                    try:
+                        self.clipboard_clear()
+                        self.update()
+                    except Exception:
+                        pass
+
+            self.after(30000, _wipe_if_same)
+        except Exception as e:
+            messagebox.showerror(self.tr("identities.title"), str(e))
+    
+    def _copy_my_sign_pub(self):
+        """Copy signing (Ed25519 verify) pubkey and schedule a conditional clipboard wipe after 30s."""
+        idn = self._current()
+        if not idn:
+            return
+        try:
+            # Identity.sign_pub_hex already exposes the verify key as hex
+            self.clipboard_clear()
+            self.clipboard_append(idn.sign_pub_hex)
+            self.update()
+            messagebox.showinfo(self.tr("identities.title"), self.tr("msg.copied"))
+
+            copied = idn.sign_pub_hex
+
+            def _wipe_if_same():
+                """Clear clipboard only if unchanged to avoid clobbering user content."""
+                try:
+                    current = self.clipboard_get()
+                except Exception:
+                    return
+                if current == copied:
+                    try:
+                        self.clipboard_clear()
+                        self.update()
+                    except Exception:
+                        pass
+
+            self.after(30000, _wipe_if_same)
         except Exception as e:
             messagebox.showerror(self.tr("identities.title"), str(e))
 
@@ -690,9 +813,11 @@ class IdentitiesManager(tk.Toplevel):
             self._refresh()
 
     def _update_buttons(self):
+        """Enable/disable actions based on whether an identity is selected."""
         has = bool(self.lb.curselection())
         state = ("normal" if has else "disabled")
-        self.btn_copy.config(state=state)
+        self.btn_copy_enc.config(state=state)
+        self.btn_copy_sign.config(state=state)
         self.btn_edit.config(state=state)
         self.btn_delete.config(state=state)
 
@@ -736,30 +861,41 @@ class ContactsManager(tk.Toplevel):
         self.btn_delete.config(state=state)
 
     def _add(self):
+        """Create a new contact; allow creating a fresh identity if requested."""
         idents = self.ident_store.list()
         dlg = ContactDialog(self, idents, self.tr, "contact.title.new", allow_new_identity=True)
         self.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id, extra = dlg.result
+            name, key, sign, ident_id, extra = dlg.result
             if extra and extra.get("create_new"):
                 idn = self.ident_store.add(extra["new_name"])
                 if self.on_identity_added:
-                    try: self.on_identity_added(idn)
-                    except Exception: pass
+                    try:
+                        self.on_identity_added(idn)
+                    except Exception:
+                        pass
                 ident_id = idn.id
-            self.contacts.add(name, key, ident_id); self._refresh()
+            self.contacts.add(name, key, sign, ident_id)
+            self._refresh()
 
     def _edit(self):
+        """Edit an existing contact; signing key pin can be updated explicitly."""
         sel = self.lb.curselection()
-        if not sel: return
-        idx = sel[0]; c = self.contacts.items()[idx]
+        if not sel:
+            return
+        idx = sel[0]
+        c = self.contacts.items()[idx]
         idents = self.ident_store.list()
-        dlg = ContactDialog(self, idents, self.tr, "contact.title.edit",
-                            name=c["name"], key=c["pub_hex"], identity_id=c["identity_id"], allow_new_identity=False)
+        dlg = ContactDialog(
+            self, idents, self.tr, "contact.title.edit",
+            name=c["name"], key=c["pub_hex"], sign_key=c.get("sign_pub_hex", ""),
+            identity_id=c["identity_id"], allow_new_identity=False
+        )
         self.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id, _extra = dlg.result
-            self.contacts.update(idx, name, key, ident_id); self._refresh()
+            name, key, sign, ident_id, _extra = dlg.result
+            self.contacts.update(idx, name, key, sign, ident_id)
+            self._refresh()
 
     def _delete(self):
         sel = self.lb.curselection()
@@ -970,4 +1106,51 @@ class AskSetPasswordDialog(tk.Toplevel):
 
     def _close(self, set_now: bool):
         self.result = {"set_now": set_now, "dont_ask": bool(self.var_skip.get())}
+        self.destroy()
+
+class ExifDialog(tk.Toplevel):
+    """
+    Show detected EXIF/metadata and let the user decide:
+    - remove EXIF and send
+    - send as-is
+    - cancel
+    .result = {"remove": True/False} or None if canceled
+    """
+    def __init__(self, parent, tr, exif_text: str):
+        super().__init__(parent)
+        self.tr = tr
+        self.title(self.tr("exif.title"))
+        self.result = None
+        self.geometry("540x420")
+        self.resizable(True, True)
+
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill="both", expand=True)
+        frm.rowconfigure(0, weight=1)
+        frm.columnconfigure(0, weight=1)
+
+        txt = tk.Text(frm, wrap="word")
+        txt.grid(row=0, column=0, sticky="nsew")
+        y = ttk.Scrollbar(frm, orient="vertical", command=txt.yview)
+        y.grid(row=0, column=1, sticky="ns")
+        txt.configure(yscrollcommand=y.set, state="normal")
+        txt.insert("end", exif_text or self.tr("exif.none"))
+        txt.configure(state="disabled")
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=1, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(btns, text=self.tr("exif.cancel"), command=self._cancel).pack(side="right")
+        ttk.Button(btns, text=self.tr("exif.keep"),
+                   command=lambda: self._close(False)).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text=self.tr("exif.remove"),
+                   command=lambda: self._close(True)).pack(side="right", padx=(0, 6))
+
+        self.grab_set()
+
+    def _close(self, remove: bool):
+        self.result = {"remove": bool(remove)}
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
         self.destroy()

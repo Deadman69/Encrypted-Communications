@@ -94,5 +94,17 @@
   "pwd.weak": "Faible",
   "pwd.medium": "Moyenne",
   "pwd.strong": "Forte",
-  "pwd.vstrong": "Très forte"
+  "pwd.vstrong": "Très forte",
+  "contact.sign_key": "Clé publique de signature (hex)",
+  "exif.title": "Métadonnées EXIF",
+  "exif.keep": "Envoyer tel quel",
+  "exif.remove": "Supprimer les données EXIF",
+  "exif.cancel": "Annuler l’envoi",
+  "exif.none": "Aucune donnée EXIF détectée.",
+  "keychange.title": "Changement de clé de signature",
+  "keychange.text": "Le contact « {name} » a changé de clé de signature.\n\nAncienne : {old}\nNouvelle : {new}\n\nAccepter la nouvelle clé ?",
+  "keychange.accept": "Accepter",
+  "keychange.reject": "Rejeter",
+  "btn.copy_my_sign_pub": "Copier ma clé publique de signature",
+  "clipboard.cleared": "Presse-papiers nettoyé."
 }

@@ -94,5 +94,17 @@
   "pwd.weak": "Weak",
   "pwd.medium": "Medium",
   "pwd.strong": "Strong",
-  "pwd.vstrong": "Very strong"
+  "pwd.vstrong": "Very strong",
+  "contact.sign_key": "Signing public key (hex)",
+  "exif.title": "EXIF metadata",
+  "exif.keep": "Send as-is",
+  "exif.remove": "Remove EXIF data",
+  "exif.cancel": "Cancel send",
+  "exif.none": "No EXIF data detected.",
+  "keychange.title": "Signing key change",
+  "keychange.text": "Contact “{name}” changed signing key.\n\nOld: {old}\nNew: {new}\n\nTrust the new key?",
+  "keychange.accept": "Accept",
+  "keychange.reject": "Reject",
+  "btn.copy_my_sign_pub": "Copy my signing public key",
+  "clipboard.cleared": "Clipboard cleared."
 }

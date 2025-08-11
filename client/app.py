@@ -4,7 +4,8 @@ from tkinter import ttk, messagebox, filedialog
 from typing import Optional, List, Dict, Tuple
 from PIL import Image, ImageTk, ImageFile
 
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+Image.MAX_IMAGE_PIXELS = 100_000_000  # ~100 MP cap
+ImageFile.LOAD_TRUNCATED_IMAGES = False
 
 from nacl.public import PrivateKey, PublicKey
 from nacl.encoding import HexEncoder
@@ -267,18 +268,41 @@ class ContactsStore:
     def items(self) -> List[Dict]:
         return list(self._arr)
 
-    def add(self, name: str, pub_hex: str, identity_id: str):
-        self._arr.append({"name": name, "pub_hex": pub_hex, "identity_id": identity_id}); self.save()
+    def add(self, name: str, pub_hex: str, sign_pub_hex: str, identity_id: str):
+        """Add a contact and pin BOTH encryption and signing public keys."""
+        self._arr.append({
+            "name": name,
+            "pub_hex": pub_hex,
+            "sign_pub_hex": sign_pub_hex,
+            "identity_id": identity_id
+        })
+        self.save()
 
-    def update(self, idx: int, name: str, pub_hex: str, identity_id: str):
-        self._arr[idx] = {"name": name, "pub_hex": pub_hex, "identity_id": identity_id}; self.save()
+    def update(self, idx: int, name: str, pub_hex: str, sign_pub_hex: str, identity_id: str):
+        """Update contact record; keep signing key pinning consistent."""
+        self._arr[idx] = {
+            "name": name,
+            "pub_hex": pub_hex,
+            "sign_pub_hex": sign_pub_hex,
+            "identity_id": identity_id
+        }
+        self.save()
 
     def delete(self, idx: int):
         del self._arr[idx]; self.save()
 
     def find_by_pub(self, pub_hex: str) -> Optional[Dict]:
+        """Find a contact by its encryption pubkey."""
         for c in self._arr:
-            if c["pub_hex"] == pub_hex: return c
+            if c["pub_hex"] == pub_hex:
+                return c
+        return None
+    
+    def find_by_sign(self, sign_hex: str) -> Optional[Dict]:
+        """Find a contact by its signing pubkey (rarely used, kept for completeness)."""
+        for c in self._arr:
+            if c.get("sign_pub_hex") == sign_hex:
+                return c
         return None
 
 class Conversation:
@@ -290,6 +314,12 @@ class Conversation:
         self.messages = []
         self._image_refs = []
         self.unread = 0
+
+        # Anti-replay: keep a small moving window of recent payload hashes
+        import collections
+        self.replay_recent = collections.deque(maxlen=500)
+        # Helps pre-fill signing key when adding unknown contacts
+        self._last_sender_sign_pub = None
 
 # ===== app =====
 class MessengerApp:
@@ -519,20 +549,27 @@ class MessengerApp:
             except: pass
 
     def _save_history(self):
+        """Persist conversations; encrypt depending on CryptoManager configuration."""
         if self.cfg.get("secure_mode", False):
-            # secure_mode: pas de persistance
+            # In secure mode, do not persist anything to disk.
             try:
-                if os.path.exists(VAULT_FILE): os.remove(VAULT_FILE)
-            except: pass
+                if os.path.exists(VAULT_FILE):
+                    os.remove(VAULT_FILE)
+            except Exception:
+                pass
             return
         try:
-            data = {"version": 1, "current_key": list(self._current_key) if self._current_key else None, "conversations": []}
+            data = {
+                "version": 1,
+                "current_key": list(self._current_key) if self._current_key else None,
+                "conversations": []
+            }
             for key, conv in self.conversations.items():
                 msgs = []
                 for m in conv.messages:
                     m2 = dict(m)
+                    # Store binary payloads as base64 lazily to keep JSON transportable
                     if "data" in m2 and isinstance(m2["data"], (bytes, bytearray)):
-                        # stocker en base64; on gardera le lazy-decode à l’affichage
                         m2["data_b64"] = base64.b64encode(m2.pop("data")).decode()
                     msgs.append(m2)
                 data["conversations"].append({
@@ -541,33 +578,34 @@ class MessengerApp:
                     "contact_name": conv.contact_name,
                     "contact_pub_hex": conv.contact_pub_hex,
                     "messages": msgs,
-                    "unread": conv.unread
+                    "unread": conv.unread,
+                    # Persist anti-replay cache so restarts do not re-accept old payloads
+                    "replay_recent": list(conv.replay_recent)
                 })
-            # Nouveau format chiffré (ou clair selon crypto)
+            # Encrypted or clear depending on CryptoManager.master_key
             self.crypto.save_json(VAULT_FILE, data, context="vault")
         except Exception as e:
             print("save_history error:", e)
 
     def _load_history(self):
+        """Load persisted conversations (supports legacy vault, then new format)."""
         if self.cfg.get("secure_mode", False):
             return
         if not os.path.exists(VAULT_FILE):
             return
-        # 1) tenter le nouveau format (CryptoManager)
+        # Try new encrypted format first
         try:
             obj = self.crypto.load_json(VAULT_FILE, default=None, context="vault")
             if obj is None:
                 return
         except Exception:
-            # 2) compat ancien format (SecretBox + VAULT_KEY_FILE)
+            # Legacy fallback (old SecretBox + VAULT_KEY_FILE layout)
             try:
                 with open(VAULT_FILE, "rb") as f:
                     enc = f.read()
-                # ancien schéma
-                box = SecretBox(self._vault_key())  # garde la compat; _vault_key() existe toujours
+                box = SecretBox(self._vault_key())
                 raw = box.decrypt(enc)
                 obj = json.loads(raw.decode())
-                # Note: au prochain _save_history(), on réécrira au nouveau format
             except Exception as e:
                 print("load_history legacy error:", e)
                 return
@@ -578,13 +616,19 @@ class MessengerApp:
                 key = tuple(rec["key"])
                 conv = Conversation(
                     ident_id=key[0],
-                    ident_name=rec.get("identity_name",""),
-                    contact_name=rec.get("contact_name",""),
+                    ident_name=rec.get("identity_name", ""),
+                    contact_name=rec.get("contact_name", ""),
                     contact_pub_hex=rec.get("contact_pub_hex", key[1])
                 )
                 conv.unread = int(rec.get("unread", 0))
+                # Restore anti-replay cache
+                for h in rec.get("replay_recent", []):
+                    try:
+                        conv.replay_recent.append(h)
+                    except Exception:
+                        pass
+                # Restore messages (lazy decode of data_b64 happens on render)
                 for m in rec.get("messages", []):
-                    # Lazy: ne pas décoder les data_b64 ici (on le fera à l’affichage)
                     conv.messages.append(dict(m))
                 self.conversations[key] = conv
         except Exception as e:
@@ -867,22 +911,14 @@ class MessengerApp:
         self.chat_text.configure(state="disabled"); self.chat_text.see("end")
 
     def _append_image(self, data_bytes, tag):
-        try:
-            bio = io.BytesIO(data_bytes); pil_img = Image.open(bio)
-            try: pil_img.load()
-            except OSError:
-                bio.seek(0); pil_img = Image.open(bio); pil_img.load()
-        except Exception:
-            self._append_line("[image]", tag); return
-
+        """Render image safely using defensive opener."""
+        pil_img = self._safe_open_thumbnail(data_bytes)
+        if pil_img is None:
+            self._append_line("[image]", tag)
+            return
         self.chat_text.configure(state="normal")
-        max_w, max_h = 420, 320
-        w, h = pil_img.size
-        scale = min(max_w / w, max_h / h, 1.0)
-        if scale < 1.0:
-            pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         img = ImageTk.PhotoImage(pil_img)
-        self.current_conv._image_refs.append(img)
+        self.current_conv._image_refs.append(img)  # prevent GC
         self.chat_text.image_create("end", image=img, padx=8)
         self.chat_text.insert("end", "\n", (tag,))
         self.chat_text.configure(state="disabled")
@@ -1104,53 +1140,81 @@ class MessengerApp:
 
     # ----- send file/image -----
     def _send_file_dialog(self):
+        """Allow file selection; if image, show EXIF dialog and allow stripping before send."""
         c = self.current_conv
         if not c:
-            messagebox.showwarning("Info", self.tr("error.no_active_conversation")); return
+            messagebox.showwarning("Info", self.tr("error.no_active_conversation"))
+            return
         path = filedialog.askopenfilename()
-        if not path: return
+        if not path:
+            return
 
         try:
             with open(path, "rb") as f:
                 data = f.read()
         except Exception as e:
-            messagebox.showerror("Error", str(e)); return
+            messagebox.showerror("Error", str(e))
+            return
 
         filename = os.path.basename(path)
         mime, _ = mimetypes.guess_type(path)
         is_image = bool(mime and mime.startswith("image/"))
+
+        # Optional EXIF review & stripping for images
+        if is_image:
+            try:
+                img = Image.open(io.BytesIO(data))
+                exif_text = self._exif_to_text(img)
+                from interface import ExifDialog
+                dlg = ExifDialog(self.root, self.tr, exif_text)
+                self.root.wait_window(dlg)
+                if dlg.result is None:
+                    return  # user canceled
+                if dlg.result.get("remove"):
+                    data = self._strip_exif_bytes(data, mime)
+            except Exception:
+                # If we fail to parse EXIF, fall through and send as-is
+                pass
+
         idn = self.ident_store.identities[c.identity_id]
         ts = int(time.time())
 
         item = {
             "local_id": "",
-            "direction":"out",
-            "kind":"image" if is_image else "file",
+            "direction": "out",
+            "kind": "image" if is_image else "file",
             "data": data,
             "filename": filename,
             "ts": ts,
             "pending": True,
             "progress": 0
         }
-        c.messages.append(item); self._render_conversation(); self._save_history()
+        c.messages.append(item)
+        self._render_conversation()
+        self._save_history()
 
-        def set_prog(p): item["progress"] = p
+        def set_prog(p):
+            item["progress"] = p
 
         def b64encode_with_progress(buf: bytes, progress_cb, start=0.0, end=10.0):
+            """Chunked base64 to keep UI progress meaningful on large files."""
             if not buf:
-                progress_cb(end); return ""
+                progress_cb(end)
+                return ""
             chunk = 64 * 1024
             total = len(buf)
-            out_parts = []; done = 0; carry = b""
+            out_parts = []
+            done = 0
+            carry = b""
             for i in range(0, total, chunk):
-                block = carry + buf[i:i+chunk]
+                block = carry + buf[i:i + chunk]
                 rem = len(block) % 3
                 to_enc = block if rem == 0 else block[:-rem]
                 if to_enc:
                     out_parts.append(base64.b64encode(to_enc))
                 carry = b"" if rem == 0 else block[-rem:]
                 done += min(chunk, total - i)
-                progress_cb(start + (end-start) * (done/total))
+                progress_cb(start + (end - start) * (done / total))
             if carry:
                 out_parts.append(base64.b64encode(carry))
             return b"".join(out_parts).decode("ascii")
@@ -1166,22 +1230,26 @@ class MessengerApp:
                 "data_b64": b64,
                 "ts": ts
             }
-            to_sign = canonical_dumps({k:v for k,v in payload.items() if k!="sig"})
+            to_sign = canonical_dumps({k: v for k, v in payload.items() if k != "sig"})
             payload["sig"] = idn.sign_sk.sign(to_sign).signature.hex()
-            progress_cb(10); return payload
+            progress_cb(10)
+            return payload
 
         def done(ok, cancelled):
-            if cancelled: return
+            if cancelled:
+                return
             item["pending"] = False
             item["status"] = "sent" if ok else "failed"
             item.pop("progress", None)
             self._render_conversation()
 
         local_id = self._send_payload_async(c.contact_pub_hex, build, on_done=done, progress_setter=set_prog)
-        item["local_id"] = local_id; self._render_conversation()
+        item["local_id"] = local_id
+        self._render_conversation()
 
     # ----- add contact from current -----
     def _add_contact_from_current(self):
+        """Create a contact from the current unknown conversation and pin the observed signing key."""
         if not self.current_conv:
             return
         conv = self.current_conv
@@ -1191,17 +1259,21 @@ class MessengerApp:
         idents = self.ident_store.list()
         ident_default = conv.identity_id  # identity that received the message
 
-        # No new identity allowed here; lock identity to ident_default
+        # No new identity allowed here; lock to the receiving identity
         dlg = ContactDialog(
             self.root, idents, self.tr,
-            "contact.title.new", name="", key=conv.contact_pub_hex,
-            identity_id=ident_default, allow_new_identity=False, fixed_identity_id=ident_default
+            "contact.title.new",
+            name="",
+            key=conv.contact_pub_hex,
+            sign_key=(conv._last_sender_sign_pub or ""),
+            identity_id=ident_default,
+            allow_new_identity=False,
+            fixed_identity_id=ident_default
         )
         self.root.wait_window(dlg)
         if dlg.result:
-            name, key, ident_id, extra = dlg.result
-            # 'extra' cannot request a new identity in this flow
-            self.contacts.add(name, key, ident_id)
+            name, key, sign, ident_id, _extra = dlg.result
+            self.contacts.add(name, key, sign, ident_id)
             conv.contact_name = name
             self._refresh_conv_sidebar(select_key=(conv.identity_id, conv.contact_pub_hex))
             self._save_history()
@@ -1268,6 +1340,7 @@ class MessengerApp:
         return None
 
     def _poll_once_for_identity(self, idn):
+        """Fetch encrypted messages, verify signatures, enforce pinning and anti-replay."""
         token = self._ensure_session_token(idn)
         if not token:
             raise RuntimeError("No session token")
@@ -1281,8 +1354,10 @@ class MessengerApp:
 
         for msg in data.get("messages", []):
             mid = msg["id"]
-            if mid in self._seen_ids: continue
+            if mid in self._seen_ids:
+                continue
             self._seen_ids.add(mid)
+
             cipher_hex = msg["cipher_hex"]
             try:
                 pt_bytes = decrypt_with(idn.box_sk, cipher_hex)
@@ -1290,36 +1365,83 @@ class MessengerApp:
             except Exception:
                 continue
 
-            sig_hex = payload.get("sig","")
-            to_verify = {k:v for k,v in payload.items() if k!="sig"}
+            # Verify sender's detached signature over canonical payload
+            sig_hex = payload.get("sig", "")
+            to_verify = {k: v for k, v in payload.items() if k != "sig"}
             body_bytes = canonical_dumps(to_verify)
-            sender_sign_pub = payload.get("sender_sign_pub","")
+            sender_sign_pub = payload.get("sender_sign_pub", "")
             try:
                 _VerifyKey(bytes.fromhex(sender_sign_pub)).verify(body_bytes, bytes.fromhex(sig_hex))
             except Exception:
                 continue
 
-            kind = payload.get("t")
-            sender_box_pub = payload.get("sender_box_pub","")
+            # Anti-replay: hash the signed payload and enforce time window
+            from security import sha256_hex
+            payload_hash = sha256_hex(body_bytes)
             signed_ts = int(payload.get("ts") or time.time())
-            contact = self.contacts.find_by_pub(sender_box_pub)
-            contact_name = contact["name"] if contact else self.tr("unknown.contact", prefix=sender_box_pub[:6])
+            now = int(time.time())
+            if abs(now - signed_ts) > 48 * 3600:
+                # Too old or too far in the future; drop
+                continue
 
+            sender_box_pub = payload.get("sender_box_pub", "")
             key = (idn.id, sender_box_pub)
             if key not in self.conversations:
-                self.conversations[key] = Conversation(idn.id, idn.name, contact_name, sender_box_pub)
+                self.conversations[key] = Conversation(
+                    idn.id, idn.name,
+                    self.tr("unknown.contact", prefix=sender_box_pub[:6]),
+                    sender_box_pub
+                )
             conv = self.conversations[key]
+            if payload_hash in conv.replay_recent:
+                # Duplicate payload (replay); drop
+                continue
+            conv.replay_recent.append(payload_hash)
 
+            # Resolve contact and enforce signing-key pinning (key continuity)
+            contact = self.contacts.find_by_pub(sender_box_pub)
+            contact_name = contact["name"] if contact else self.tr("unknown.contact", prefix=sender_box_pub[:6])
+            conv.contact_name = contact_name  # keep label in sync
+
+            if contact and contact.get("sign_pub_hex"):
+                pinned = contact["sign_pub_hex"]
+                if pinned != sender_sign_pub:
+                    # Signing key changed: ask user whether to trust the new one.
+                    def _ask_key_change():
+                        if messagebox.askyesno(
+                            self.tr("keychange.title"),
+                            self.tr("keychange.text",
+                                    name=contact_name,
+                                    old=pinned[:10] + "…" + pinned[-8:],
+                                    new=sender_sign_pub[:10] + "…" + sender_sign_pub[-8:])
+                        ):
+                            # Update pinned signing key
+                            items = self.contacts.items()
+                            idx = next((i for i, cx in enumerate(items) if cx["pub_hex"] == sender_box_pub), None)
+                            if idx is not None:
+                                self.contacts.update(idx, contact["name"], contact["pub_hex"], sender_sign_pub, contact["identity_id"])
+                        # Either way, do not deliver this message until user decides.
+                    try:
+                        self.root.after(0, _ask_key_change)
+                    except Exception:
+                        pass
+                    continue  # hold message until decision
+            else:
+                # Unknown sender: remember the observed signing key to pre-fill the add-contact flow
+                conv._last_sender_sign_pub = sender_sign_pub
+
+            # Decode and append message content
+            kind = payload.get("t")
             try:
                 if kind == "text":
-                    text = payload.get("text","")
-                    conv.messages.append({"direction":"in","kind":"text","text":text,"ts":signed_ts})
+                    text = payload.get("text", "")
+                    conv.messages.append({"direction": "in", "kind": "text", "text": text, "ts": signed_ts})
                 elif kind == "image":
-                    raw = base64.b64decode(payload.get("data_b64",""), validate=True)
-                    conv.messages.append({"direction":"in","kind":"image","data":raw,"filename":payload.get("filename"),"ts":signed_ts})
+                    raw = base64.b64decode(payload.get("data_b64", ""), validate=True)
+                    conv.messages.append({"direction": "in", "kind": "image", "data": raw, "filename": payload.get("filename"), "ts": signed_ts})
                 else:
-                    raw = base64.b64decode(payload.get("data_b64",""), validate=True)
-                    conv.messages.append({"direction":"in","kind":"file","data":raw,"filename":payload.get("filename"),"ts":signed_ts})
+                    raw = base64.b64decode(payload.get("data_b64", ""), validate=True)
+                    conv.messages.append({"direction": "in", "kind": "file", "data": raw, "filename": payload.get("filename"), "ts": signed_ts})
             except binascii.Error:
                 continue
 
@@ -1365,6 +1487,70 @@ class MessengerApp:
         else:
             self._save_history()
         self.root.destroy()
+
+    def _exif_to_text(self, pil_img) -> str:
+        """Extract a readable JSON string of EXIF-like metadata for user review."""
+        try:
+            meta = {}
+            if hasattr(pil_img, "getexif"):
+                exif = pil_img.getexif()
+                if exif:
+                    for k, v in exif.items():
+                        tag = ExifTags.TAGS.get(k, str(k))
+                        meta[tag] = str(v)
+            # Some formats store extra metadata in .info
+            if getattr(pil_img, "info", None):
+                for k in ("exif", "icc_profile", "XML:com.adobe.xmp"):
+                    if k in pil_img.info:
+                        meta[k] = f"{len(pil_img.info[k])} bytes"
+            import json as _json
+            return _json.dumps(meta or {}, indent=2, ensure_ascii=False)
+        except Exception:
+            return "{}"
+
+    def _strip_exif_bytes(self, data: bytes, mime: Optional[str]) -> bytes:
+        """Re-encode image to remove EXIF and similar metadata."""
+        try:
+            bio = io.BytesIO(data)
+            img = Image.open(bio)
+            fmt = (img.format or "").upper()
+            out = io.BytesIO()
+            if fmt in ("JPEG", "JPG"):
+                img = img.convert("RGB")
+                # Save JPEG without EXIF
+                img.save(out, format="JPEG", quality=92, optimize=True, exif=b"")
+            elif fmt == "PNG":
+                # Re-saving PNG drops ancillary chunks by default with Pillow
+                img.save(out, format="PNG")
+            else:
+                # Fallback: neutral PNG without metadata
+                img.save(out, format="PNG")
+            return out.getvalue()
+        except Exception:
+            # If strip fails, return original bytes to avoid silent data loss
+            return data
+    
+    def _safe_open_thumbnail(self, data_bytes: bytes, max_w=420, max_h=320) -> Optional[Image.Image]:
+        """
+        Open image defensively:
+        - verify() detects truncated/forged images
+        - enforce global pixel cap (set at import)
+        - resize to a reasonable UI size
+        """
+        try:
+            bio = io.BytesIO(data_bytes)
+            img = Image.open(bio)
+            img.verify()  # basic structural validation
+            # Re-open after verify (Pillow requirement)
+            bio2 = io.BytesIO(data_bytes)
+            img2 = Image.open(bio2)
+            img2.load()
+            scale = min(max_w / img2.width, max_h / img2.height, 1.0)
+            if scale < 1.0:
+                img2 = img2.resize((int(img2.width * scale), int(img2.height * scale)), Image.LANCZOS)
+            return img2
+        except Exception:
+            return None
 
 # ===== main =====
 if __name__ == "__main__":

@@ -1,10 +1,4 @@
-Awesome — here are the two docs you asked for, fully written in English and split for audience.
-
----
-
-# README.md (end-user guide)
-
-## Encrypted Messaging App
+# Encrypted Messaging App
 
 A minimal, privacy-first desktop messenger with **end-to-end encryption**, sealed-sender style delivery (the server never learns who sent a message), and a simple **Tkinter** UI.
 

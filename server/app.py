@@ -79,16 +79,20 @@ async def get_messages(request: Request, q: GetIn):
     box_pub_allowed = require_known_user(sign_pub)
     if q.recipient != box_pub_allowed:
         raise HTTPException(403, "Forbidden recipient")
+
     try:
         now = int(time.time())
         conn = connect(); cur = conn.cursor()
+
+        # Delete and return in one request
         cur.execute("""
-            SELECT id, cipher_hex, created_at, expiration_time
-            FROM messages
-            WHERE recipient=? AND expiration_time>? AND delivered_at IS NULL
-            ORDER BY id ASC
+            DELETE FROM messages
+             WHERE recipient=? AND expiration_time>? 
+             RETURNING id, cipher_hex, created_at, expiration_time
         """, (q.recipient, now))
-        rows = cur.fetchall(); conn.close()
+        rows = cur.fetchall()
+        conn.commit(); conn.close()
+
         msgs = [{"id": r[0], "cipher_hex": r[1], "created_at": r[2], "expiration_time": r[3]} for r in rows]
         return {"messages": msgs}
     except Exception as e:

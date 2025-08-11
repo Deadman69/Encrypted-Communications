@@ -25,7 +25,10 @@ POW_DIFF = int(config.get("pow_difficulty", 5))
 POW_WIN  = int(config.get("pow_window_secs", 120))
 
 def connect():
-    return sqlite3.connect(DATABASE, check_same_thread=False)
+    conn = sqlite3.connect(DATABASE, check_same_thread=False)
+    conn.execute("PRAGMA secure_delete=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 def ensure_schema():
     conn = connect(); cur = conn.cursor()

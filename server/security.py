@@ -47,7 +47,8 @@ def check_pow(salt: str, nonce_hex: str, cipher_hex: str) -> bool:
     try:
         nonce = bytes.fromhex(nonce_hex)
         ct = bytes.fromhex(cipher_hex)
+        ct_digest = hashlib.sha256(ct).digest()
     except Exception:
         return False
-    h = sha256_hex(salt.encode() + nonce + ct)
+    h = sha256_hex(salt.encode() + nonce + ct_digest)
     return h.startswith("0" * POW_DIFF)

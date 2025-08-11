@@ -69,6 +69,7 @@ class PoWHelper:
             salt = self.salt or str(int(time.time() // max(self.window_secs, 1)))
             target_prefix = "0" * int(self.difficulty)
             ct = bytes.fromhex(cipher_hex)
+            ct_digest = hashlib.sha256(ct).digest()
 
             nonce_int = 0
             # Estimation moyenne d’essais pour un préfixe hex de n zéros = 16^n
@@ -80,7 +81,7 @@ class PoWHelper:
                     raise RuntimeError("CANCELLED")
 
                 nonce = nonce_int.to_bytes(8, "big")
-                h = sha256_hex(salt.encode() + nonce + ct)
+                h = sha256_hex(salt.encode() + nonce + ct_digest)
                 if h.startswith(target_prefix):
                     if progress_hook:
                         try: progress_hook(expected, expected)  # 100 %

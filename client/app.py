@@ -894,13 +894,24 @@ class MessengerApp:
             total = len(buf)
             out_parts = []
             done = 0
+            carry = b""
+
             for i in range(0, total, chunk):
-                part = base64.b64encode(buf[i:i+chunk])
-                out_parts.append(part)
+                block = carry + buf[i:i+chunk]
+                rem = len(block) % 3
+                to_enc = block if rem == 0 else block[:-rem]
+                if to_enc:
+                    out_parts.append(base64.b64encode(to_enc))
+                carry = b"" if rem == 0 else block[-rem:]
+
                 done += min(chunk, total - i)
                 frac = done / total
-                progress_cb(start + (end-start) * frac)
-            return b"".join(out_parts).decode()
+                progress_cb(start + (end - start) * frac)
+
+            if carry:
+                out_parts.append(base64.b64encode(carry))
+
+            return b"".join(out_parts).decode("ascii")
 
         def build(progress_cb):
             b64 = b64encode_with_progress(data, progress_cb, 0, 10)
@@ -1031,10 +1042,10 @@ class MessengerApp:
                 text = payload.get("text","")
                 conv.messages.append({"direction":"in","kind":"text","text":text,"ts":created_ts})
             elif kind == "image":
-                raw = base64.b64decode(payload.get("data_b64",""))
+                raw = base64.b64decode(payload.get("data_b64",""), validate=True)
                 conv.messages.append({"direction":"in","kind":"image","data":raw,"filename":payload.get("filename"),"ts":created_ts})
             else:
-                raw = base64.b64decode(payload.get("data_b64",""))
+                raw = base64.b64decode(payload.get("data_b64",""), validate=True)
                 conv.messages.append({"direction":"in","kind":"file","data":raw,"filename":payload.get("filename"),"ts":created_ts})
 
             if self.current_conv is None or conv is not self.current_conv:

@@ -380,13 +380,16 @@ class IdentitiesManager(tk.Toplevel):
         self.title(self.tr("identities.title")); self.geometry("640x420")
         frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
         self.lb = tk.Listbox(frame, height=12); self.lb.pack(fill="both", expand=True)
+        self.lb.bind("<<ListboxSelect>>", lambda _e: self._update_buttons())
 
         btns = ttk.Frame(frame); btns.pack(fill="x", pady=(8,0))
         ttk.Button(btns, text=self.tr("btn.add"), command=self._add).pack(side="left")
         ttk.Button(btns, text=self.tr("btn.rename"), command=self._rename).pack(side="left", padx=6)
         ttk.Button(btns, text=self.tr("btn.edit"), command=self._edit).pack(side="left")
-        ttk.Button(btns, text=self.tr("btn.copy_my_pub"), command=self._copy_my_pub).pack(side="left", padx=6)
-        ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete).pack(side="left")
+        self.btn_copy = ttk.Button(btns, text=self.tr("btn.copy_my_pub"), command=self._copy_my_pub, state="disabled")
+        self.btn_copy.pack(side="left", padx=6)
+        self.btn_delete = ttk.Button(btns, text=self.tr("btn.delete"), command=self._delete, state="disabled")
+        self.btn_delete.pack(side="left")
         ttk.Button(btns, text=self.tr("btn.close"), command=self.destroy).pack(side="right")
         self._refresh()
 
@@ -395,6 +398,7 @@ class IdentitiesManager(tk.Toplevel):
         for idn in self.ident_store.list():
             short = idn.box_pub_hex[:8] + "…" + idn.box_pub_hex[-8:]
             self.lb.insert(tk.END, f"{idn.name} · {short}")
+        self._update_buttons()
 
     def _current(self):
         sel = self.lb.curselection()
@@ -494,6 +498,11 @@ class IdentitiesManager(tk.Toplevel):
         if messagebox.askyesno(self.tr("identities.title"), self.tr("confirm.delete_identity", name=idn.name)):
             self.ident_store.delete(idn.id)
             self._refresh()
+
+    def _update_buttons(self):
+        has = bool(self.lb.curselection())
+        self.btn_copy.config(state=("normal" if has else "disabled"))
+        self.btn_delete.config(state=("normal" if has else "disabled"))
 
 class ContactsManager(tk.Toplevel):
     """Fenêtre de gestion des contacts."""

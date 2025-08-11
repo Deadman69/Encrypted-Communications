@@ -100,7 +100,7 @@ A `client/config.json` is created on first run:
   "language": "en",
   "secure_mode": false,
   "ask_set_password": true,
-  "use_tor": true,
+  "use_tor": false,
   "socks_proxy": "socks5h://127.0.0.1:9050",
   "polling_base": 5.0,
   "polling_jitter": 3.0

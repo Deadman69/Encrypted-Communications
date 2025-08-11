@@ -1,0 +1,65 @@
+name: build-and-release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: ubuntu-latest
+            target: linux
+          - os: macos-latest
+            target: macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build client
+        working-directory: client
+        run: |
+          cd client
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            pyinstaller --noconfirm --onefile --noconsole --name EncryptedClient --add-data "langs;langs" app.py
+          elif [ "${{ matrix.target }}" = "macos" ]; then
+            pyinstaller --noconfirm --onefile --noconsole --name EncryptedClient --add-data "langs:langs" app.py
+          else
+            pyinstaller --noconfirm --onefile --noconsole --name EncryptedClient --add-data "langs:langs" app.py
+          fi
+
+      - name: Build server
+        working-directory: server
+        run: |
+          cd server
+          pyinstaller --noconfirm --onefile --name EncryptedServer app.py
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist_upload
+          # client
+          cp client/dist/EncryptedClient* dist_upload/ || true
+          # server
+          cp server/dist/EncryptedServer* dist_upload/ || true
+          # checksums
+          (cd dist_upload && shasum -a 256 * > SHA256SUMS.txt || sha256sum * > SHA256SUMS.txt)
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist_upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

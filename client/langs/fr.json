@@ -106,5 +106,9 @@
   "keychange.accept": "Accepter",
   "keychange.reject": "Rejeter",
   "btn.copy_my_sign_pub": "Copier ma clé publique de signature",
-  "clipboard.cleared": "Presse-papiers nettoyé."
+  "clipboard.cleared": "Presse-papiers nettoyé.",
+  "menu.help.check_updates": "Rechercher des mises à jour",
+  "update.latest_is": "Vous utilisez déjà la dernière version ({version}).",
+  "update.update_available": "Nouvelle version disponible !\nActuelle : {current}\nDernière : {latest}\n\nOuvrir la page de téléchargement ?",
+  "update.error": "Échec de la vérification de mise à jour : {err}"
 }

@@ -146,7 +146,12 @@ class I18n:
             "keychange.reject": "Rejeter",
 
             "btn.copy_my_sign_pub": "Copier ma clé publique de signature",
-            "clipboard.cleared": "Presse-papiers nettoyé."
+            "clipboard.cleared": "Presse-papiers nettoyé.",
+
+            "menu.help.check_updates": "Rechercher des mises à jour",
+            "update.latest_is": "Vous utilisez déjà la dernière version ({version}).",
+            "update.update_available": "Nouvelle version disponible !\nActuelle : {current}\nDernière : {latest}\n\nOuvrir la page de téléchargement ?",
+            "update.error": "Échec de la vérification de mise à jour : {err}"
         }
         en = {
             "app.title": "Encrypted Messaging",
@@ -276,7 +281,12 @@ class I18n:
             "keychange.reject": "Reject",
 
             "btn.copy_my_sign_pub": "Copy my signing public key",
-            "clipboard.cleared": "Clipboard cleared."
+            "clipboard.cleared": "Clipboard cleared.",
+
+            "menu.help.check_updates": "Check for updates",
+            "update.latest_is": "You are already on the latest version ({version}).",
+            "update.update_available": "A new version is available!\nCurrent: {current}\nLatest: {latest}\n\nOpen the download page?",
+            "update.error": "Update check failed: {err}"
         }
         self._write_if_missing("fr.json", fr)
         self._write_if_missing("en.json", en)

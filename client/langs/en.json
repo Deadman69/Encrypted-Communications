@@ -106,5 +106,9 @@
   "keychange.accept": "Accept",
   "keychange.reject": "Reject",
   "btn.copy_my_sign_pub": "Copy my signing public key",
-  "clipboard.cleared": "Clipboard cleared."
+  "clipboard.cleared": "Clipboard cleared.",
+  "menu.help.check_updates": "Check for updates",
+  "update.latest_is": "You are already on the latest version ({version}).",
+  "update.update_available": "A new version is available!\nCurrent: {current}\nLatest: {latest}\n\nOpen the download page?",
+  "update.error": "Update check failed: {err}"
 }

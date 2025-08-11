@@ -19,8 +19,10 @@ from interface import (
     I18n, ContactDialog, IdentityDialog, IdentitiesManager, ContactsManager,
     SelectContactDialog, SettingsDialog
 )
+from updates import check_for_updates
 
 # ===== files & config =====
+APP_VERSION = "1.0.0"
 CONFIG_FILE   = "config.json"
 IDENTS_FILE   = "identities.json"
 CONTACTS_FILE = "contacts.json"
@@ -30,19 +32,17 @@ VAULT_KEY_FILE= "vault.key"
 LOCK_FILE = "master.lock"
 ENC_MAGIC = b"EMSGENC1"
 
-REPO_URL    = "https://github.com/Deadman69/Encrypted-Communications"
+GITHUB_REPO = "Deadman69/Encrypted-Communications"
+REPO_URL    = "https://github.com/" + GITHUB_REPO
 LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html"
 
 DEFAULT_CONFIG = {
     "server_url": "http://localhost:8000",
     "language": "en",
     "secure_mode": False,
-    # demander de définir un mot de passe quand aucun n'est défini
     "ask_set_password": True,
-    # network
-    "use_tor": True,
+    "use_tor": False,
     "socks_proxy": "socks5h://127.0.0.1:9050",
-    # polling
     "polling_base": 5.0,
     "polling_jitter": 3.0
 }
@@ -758,11 +758,17 @@ class MessengerApp:
         help_menu.add_command(label=self.tr("menu.help.license"), command=lambda: webbrowser.open(LICENSE_URL))
         help_menu.add_separator()
         help_menu.add_command(
+            label=self.tr("menu.help.check_updates"),
+            command=lambda: check_for_updates(
+                self.root, self.http, self.tr,
+                current_version=APP_VERSION, github_repo=GITHUB_REPO, silent=False
+            )
+        )
+        help_menu.add_command(
             label=self.tr("menu.help.about"),
             command=lambda: messagebox.showinfo(self.tr("about.title"), self.tr("about.text", url=REPO_URL))
         )
         menubar.add_cascade(label=self.tr("menu.help"), menu=help_menu)
-
         self.root.config(menu=menubar)
 
     def _open_settings(self):

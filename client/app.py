@@ -1030,47 +1030,56 @@ class MessengerApp:
                     pass
 
         def worker():
-            ok = True; cancelled = False
+            ok = True
+            cancelled = False
             try:
                 # 0..10% prepare
                 ui_progress(1)
-                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+                if cancel_event.is_set():
+                    raise RuntimeError("CANCELLED")
                 payload = payload_builder_callable(lambda p: ui_progress(min(p, 10)))
 
                 # 10..20% encrypt
                 ui_progress(12)
-                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+                if cancel_event.is_set():
+                    raise RuntimeError("CANCELLED")
                 cipher_hex = encrypt_for(recipient_pub_hex, payload)
                 ui_progress(20)
 
                 # 20..90% PoW
                 def pow_hook(tries, expected):
-                    if cancel_event.is_set(): raise RuntimeError("CANCELLED")
-                    try: frac = float(tries) / float(expected)
-                    except Exception: frac = 0.0
+                    if cancel_event.is_set():
+                        raise RuntimeError("CANCELLED")
+                    try:
+                        frac = float(tries) / float(expected)
+                    except Exception:
+                        frac = 0.0
                     ui_progress(20 + 70 * min(0.999, max(0.0, frac)))
 
                 nonce_hex = self.pow.compute_nonce(cipher_hex, progress_hook=pow_hook, cancel_event=cancel_event)
                 ui_progress(90)
-                if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+                if cancel_event.is_set():
+                    raise RuntimeError("CANCELLED")
 
                 # 90..100% HTTP upload
                 url = self.cfg["server_url"].rstrip("/") + "/put/"
-                exp = int(time.time()) + 24*3600
+                exp = int(time.time()) + 24 * 3600
                 body = {
                     "recipient": recipient_pub_hex,
                     "expiration_time": exp,
                     "cipher_hex": cipher_hex,
                     "pow": {"salt": self.pow.salt, "nonce": nonce_hex}
                 }
-                body_bytes = json.dumps(body, separators=(',',':')).encode()
+                body_bytes = json.dumps(body, separators=(',', ':')).encode()
 
                 class ProgressBytesIO(io.BytesIO):
                     def __init__(self, buf):
                         super().__init__(buf)
-                        self._total = len(buf); self._sent = 0
+                        self._total = len(buf)
+                        self._sent = 0
                     def read(self, n=-1):
-                        if cancel_event.is_set(): raise RuntimeError("CANCELLED")
+                        if cancel_event.is_set():
+                            raise RuntimeError("CANCELLED")
                         chunk = super().read(n)
                         self._sent += len(chunk)
                         if self._total > 0:
@@ -1084,12 +1093,15 @@ class MessengerApp:
                 ui_progress(100)
 
             except Exception as e:
-                ok = False; cancelled = (str(e) == "CANCELLED")
+                ok = False
+                cancelled = (str(e) == "CANCELLED")
                 if not cancelled:
-                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                    self.root.after(0, lambda msg=str(e): messagebox.showerror("Error", msg))
             finally:
-                try: del self._pending[local_id]
-                except: pass
+                try:
+                    del self._pending[local_id]
+                except:
+                    pass
                 if on_done:
                     self.root.after(0, lambda: on_done(ok, cancelled))
                 self.root.after(0, self._dec_busy)

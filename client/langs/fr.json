@@ -19,6 +19,13 @@
   "lang.en": "English",
   "menu.actions": "Actions",
   "menu.actions.refresh": "Rafraîchir maintenant",
+  "menu.actions.settings": "Paramètres…",
+  "settings.title": "Paramètres",
+  "settings.server_url": "URL du serveur",
+  "settings.use_tor": "Utiliser TOR (SOCKS)",
+  "settings.socks_proxy": "Proxy SOCKS (ex: socks5h://127.0.0.1:9050)",
+  "settings.poll_base": "Polling (base, s)",
+  "settings.poll_jitter": "Polling (aléa, s)",
   "info.add_contact_first": "Ajoutez d'abord un contact.",
   "new.chat.title": "Nouvelle conversation",
   "new.chat.prompt": "Tapez le numéro :",
@@ -66,5 +73,5 @@
   "secure.confirm.title": "Mode sécurisé",
   "secure.confirm.text": "Activer le mode sécurisé va supprimer TOUTES les données locales (identités, contacts, conversations). Continuer ?",
   "secure.exit.title": "Quitter – Mode sécurisé",
-  "secure.exit.text": "Vous êtes en mode sécurisé. On quitter, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?"
+  "secure.exit.text": "Vous êtes en mode sécurisé. En quittant, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?"
 }

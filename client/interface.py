@@ -42,6 +42,14 @@ class I18n:
 
             "menu.actions": "Actions",
             "menu.actions.refresh": "Rafraîchir maintenant",
+            "menu.actions.settings": "Paramètres…",
+
+            "settings.title": "Paramètres",
+            "settings.server_url": "URL du serveur",
+            "settings.use_tor": "Utiliser TOR (SOCKS)",
+            "settings.socks_proxy": "Proxy SOCKS (ex: socks5h://127.0.0.1:9050)",
+            "settings.poll_base": "Polling (base, s)",
+            "settings.poll_jitter": "Polling (aléa, s)",
 
             "info.add_contact_first": "Ajoutez d'abord un contact.",
             "new.chat.title": "Nouvelle conversation",
@@ -126,6 +134,14 @@ class I18n:
 
             "menu.actions": "Actions",
             "menu.actions.refresh": "Refresh now",
+            "menu.actions.settings": "Settings…",
+
+            "settings.title": "Settings",
+            "settings.server_url": "Server URL",
+            "settings.use_tor": "Use TOR (SOCKS)",
+            "settings.socks_proxy": "SOCKS proxy (e.g. socks5h://127.0.0.1:9050)",
+            "settings.poll_base": "Polling (base, s)",
+            "settings.poll_jitter": "Polling (jitter, s)",
 
             "info.add_contact_first": "Add a contact first.",
             "new.chat.title": "New conversation",
@@ -216,7 +232,60 @@ class I18n:
     def current_lang(self) -> str:
         return self._lang
 
-# ================== Dialogs ==================
+# ================== Settings dialog ==================
+class SettingsDialog(tk.Toplevel):
+    def __init__(self, parent, tr: Callable[[str], str], cfg: dict):
+        super().__init__(parent)
+        self.tr = tr
+        self.title(self.tr("settings.title")); self.resizable(False, False)
+        self.result = None
+
+        frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
+        frm.columnconfigure(1, weight=1)
+
+        ttk.Label(frm, text=self.tr("settings.server_url")).grid(row=0, column=0, sticky="w")
+        self.e_url = ttk.Entry(frm, width=50); self.e_url.grid(row=0, column=1, sticky="ew")
+        self.e_url.insert(0, cfg.get("server_url",""))
+
+        self.var_tor = tk.BooleanVar(value=bool(cfg.get("use_tor", True)))
+        self.chk_tor = ttk.Checkbutton(frm, text=self.tr("settings.use_tor"), variable=self.var_tor)
+        self.chk_tor.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6,0))
+
+        ttk.Label(frm, text=self.tr("settings.socks_proxy")).grid(row=2, column=0, sticky="w", pady=(6,0))
+        self.e_proxy = ttk.Entry(frm, width=50); self.e_proxy.grid(row=2, column=1, sticky="ew")
+        self.e_proxy.insert(0, cfg.get("socks_proxy", "socks5h://127.0.0.1:9050"))
+
+        ttk.Label(frm, text=self.tr("settings.poll_base")).grid(row=3, column=0, sticky="w", pady=(6,0))
+        self.e_base = ttk.Entry(frm, width=12); self.e_base.grid(row=3, column=1, sticky="w", pady=(6,0))
+        self.e_base.insert(0, str(cfg.get("polling_base", 5)))
+
+        ttk.Label(frm, text=self.tr("settings.poll_jitter")).grid(row=4, column=0, sticky="w", pady=(6,0))
+        self.e_jitter = ttk.Entry(frm, width=12); self.e_jitter.grid(row=4, column=1, sticky="w", pady=(6,0))
+        self.e_jitter.insert(0, str(cfg.get("polling_jitter", 3)))
+
+        btns = ttk.Frame(frm); btns.grid(row=5, column=0, columnspan=2, pady=(10,0), sticky="e")
+        ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
+        ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
+
+        self.bind("<Return>", lambda _e: self._ok())
+        self.grab_set(); self.e_url.focus_set()
+
+    def _ok(self):
+        try:
+            base = float(self.e_base.get().strip())
+            jitter = float(self.e_jitter.get().strip())
+        except Exception:
+            base, jitter = 5.0, 3.0
+        self.result = {
+            "server_url": self.e_url.get().strip(),
+            "use_tor": bool(self.var_tor.get()),
+            "socks_proxy": self.e_proxy.get().strip(),
+            "polling_base": base,
+            "polling_jitter": jitter,
+        }
+        self.destroy()
+
+# ================== Dialogs: Contact / Identity / Managers ==================
 class ContactDialog(tk.Toplevel):
     def __init__(self, parent, identities: List, tr: Callable[[str], str],
                  title_key="contact.title.new", name="", key="", identity_id=None,
@@ -237,7 +306,7 @@ class ContactDialog(tk.Toplevel):
         self.e_key = ttk.Entry(frm, width=70); self.e_key.grid(row=1, column=1, sticky="ew", pady=(6,0))
         self.e_key.insert(0, key)
 
-        # --- Choix identité (nouvelle par défaut) ---
+        # Identity choice (new by default)
         self.choice = tk.StringVar(value=("new" if allow_new_identity else "existing"))
         rb_new = ttk.Radiobutton(frm, text=self.tr("contact.new_identity_recommended"),
                                  variable=self.choice, value="new")
@@ -246,15 +315,15 @@ class ContactDialog(tk.Toplevel):
         rb_new.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8,0))
         rb_old.grid(row=3, column=0, columnspan=2, sticky="w")
 
-        # zone "nouvelle identité"
+        # "new identity" zone
         self.lbl_new = ttk.Label(frm, text=self.tr("contact.new_identity_name"))
         self.e_new_ident = ttk.Entry(frm)
-        default_ident = (name or "Contact") + " – Identité"
+        default_ident = (name or "Contact") + " – Identity"
         self.e_new_ident.insert(0, default_ident)
         self.lbl_new.grid(row=4, column=0, sticky="w", pady=(6,0))
         self.e_new_ident.grid(row=4, column=1, sticky="ew", pady=(6,0))
 
-        # zone "existante"
+        # "existing identity" zone
         ttk.Label(frm, text=self.tr("contact.identity")).grid(row=5, column=0, sticky="w", pady=(6,0))
         self.id_map = {idn.name: idn.id for idn in identities}
         names = list(self.id_map.keys()) or ["(none)"]
@@ -292,7 +361,7 @@ class ContactDialog(tk.Toplevel):
             messagebox.showerror(self.tr("contact.title.new"), self.tr("error.invalid_pubkey")); return
 
         if self.choice.get() == "new":
-            new_ident_name = self.e_new_ident.get().strip() or "Nouvelle identité"
+            new_ident_name = self.e_new_ident.get().strip() or "New identity"
             self.result = (name, key, None, {"create_new": True, "new_name": new_ident_name})
         else:
             id_name = self.cmb.get()
@@ -302,9 +371,7 @@ class ContactDialog(tk.Toplevel):
 
 class IdentityDialog(tk.Toplevel):
     """
-    Dialogue d'identité avec Mode Avancé (saisie manuelle des clés).
-    - En mode simple: seul le nom.
-    - En mode avancé: box_sk (+ optionnel box_pk), sign_sk (+ optionnel sign_pk).
+    Identity dialog with an Advanced mode for manual key material.
     """
     def __init__(self, parent, tr: Callable[[str], str], title_key="identities.title",
                  initial_name="", initial_keys=None):
@@ -317,18 +384,15 @@ class IdentityDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
-        # Nom
         ttk.Label(frm, text=self.tr("contact.name")).grid(row=0, column=0, sticky="w")
         self.e_name = ttk.Entry(frm); self.e_name.grid(row=0, column=1, sticky="ew")
         self.e_name.insert(0, initial_name or "")
 
-        # Toggle avancé
         self.var_adv = tk.BooleanVar(value=False)
         chk = ttk.Checkbutton(frm, text=self.tr("adv.toggle"),
                               variable=self.var_adv, command=self._toggle_adv)
         chk.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6,4))
 
-        # Zone avancée
         self.adv = ttk.Frame(frm); self.adv.grid(row=2, column=0, columnspan=2, sticky="ew")
         for i in range(2): self.adv.columnconfigure(i, weight=1)
 
@@ -344,17 +408,14 @@ class IdentityDialog(tk.Toplevel):
         ttk.Label(self.adv, text=self.tr("adv.sign_pk")).grid(row=3, column=0, sticky="w", pady=(4,0))
         self.e_sign_pk = ttk.Entry(self.adv, width=70); self.e_sign_pk.grid(row=3, column=1, sticky="ew", pady=(4,0))
 
-        # Pré-remplissage si édition
         if self._initial_keys:
             self.e_box_sk.insert(0, self._initial_keys.get("box_sk_hex",""))
             self.e_box_pk.insert(0, self._initial_keys.get("box_pk_hex",""))
             self.e_sign_sk.insert(0, self._initial_keys.get("sign_sk_hex",""))
             self.e_sign_pk.insert(0, self._initial_keys.get("sign_pk_hex",""))
 
-        # Masquer au démarrage
         self._show_adv(False)
 
-        # Boutons
         btns = ttk.Frame(frm); btns.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky="e")
         ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
         ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
@@ -387,14 +448,12 @@ class IdentityDialog(tk.Toplevel):
                 try: return s and len(s)==64 and int(s,16) >= 0
                 except: return False
 
-            # Exiger au moins les PRIVÉES
             if not (_is_hex_32(box_sk) and _is_hex_32(sign_sk)):
                 messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
 
-            # Les publiques sont optionnelles (recalculées si absentes)
-            if box_pk and not _is_hex_32(box_pk): 
+            if box_pk and not _is_hex_32(box_pk):
                 messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
-            if sign_pk and not _is_hex_32(sign_pk): 
+            if sign_pk and not _is_hex_32(sign_pk):
                 messagebox.showerror(self.tr("identities.title"), self.tr("error.keys_incomplete")); return
 
             out["keys"] = {
@@ -409,7 +468,7 @@ class IdentityDialog(tk.Toplevel):
 
 # ================== Windows (Managers) ==================
 class IdentitiesManager(tk.Toplevel):
-    """Fenêtre de gestion des identités."""
+    """Identity manager window."""
     def __init__(self, parent, ident_store, tr: Callable[[str], str],
                  on_added: Optional[Callable] = None,
                  on_changed: Optional[Callable] = None):
@@ -422,8 +481,6 @@ class IdentitiesManager(tk.Toplevel):
         self.title(self.tr("identities.title")); self.geometry("640x420")
         frame = ttk.Frame(self, padding=8); frame.pack(fill="both", expand=True)
         self.lb = tk.Listbox(frame, height=12); self.lb.pack(fill="both", expand=True)
-
-        # activer/désactiver selon la sélection
         self.lb.bind("<<ListboxSelect>>", lambda _e: self._update_buttons())
 
         btns = ttk.Frame(frame); btns.pack(fill="x", pady=(8,0))
@@ -449,7 +506,7 @@ class IdentitiesManager(tk.Toplevel):
 
     def _current(self):
         sel = self.lb.curselection()
-        if not sel: 
+        if not sel:
             return None
         return self.ident_store.list()[sel[0]]
 
@@ -467,7 +524,7 @@ class IdentitiesManager(tk.Toplevel):
     def _add(self):
         dlg = IdentityDialog(self, self.tr, "identities.title")
         self.wait_window(dlg)
-        if not dlg.result: 
+        if not dlg.result:
             return
         name = dlg.result["name"]
         keys = dlg.result.get("keys")
@@ -496,7 +553,7 @@ class IdentitiesManager(tk.Toplevel):
         }
         dlg = IdentityDialog(self, self.tr, "identities.title", initial_name=idn.name, initial_keys=init)
         self.wait_window(dlg)
-        if not dlg.result: 
+        if not dlg.result:
             return
         name = dlg.result["name"]
         keys = dlg.result.get("keys")
@@ -505,7 +562,6 @@ class IdentitiesManager(tk.Toplevel):
             if name and name != idn.name:
                 self.ident_store.rename(idn.id, name)
             if keys:
-                # Compléter pubkeys si absentes
                 box_sk_hex = keys["box_sk_hex"]
                 box_pk_hex = keys.get("box_pk_hex")
                 sign_sk_hex = keys["sign_sk_hex"]
@@ -551,7 +607,7 @@ class IdentitiesManager(tk.Toplevel):
         self.btn_copy.config(state=("normal" if has else "disabled"))
 
 class ContactsManager(tk.Toplevel):
-    """Fenêtre de gestion des contacts."""
+    """Contacts manager window."""
     def __init__(self, parent, contacts_store, identities_store, tr: Callable[[str], str],
                  on_identity_added: Optional[Callable] = None):
         super().__init__(parent)
@@ -612,7 +668,6 @@ class ContactsManager(tk.Toplevel):
             idx = sel[0]
             self.contacts.delete(idx); self._refresh()
 
-# --------- Sélection de contact (nouvelle conversation) ---------
 class SelectContactDialog(tk.Toplevel):
     def __init__(self, parent, contacts_store, identities_store, tr: Callable[[str], str]):
         super().__init__(parent)
@@ -621,7 +676,7 @@ class SelectContactDialog(tk.Toplevel):
         self.ident_store = identities_store
         self.result = None
 
-        self.title(tr("new.chat.select_title")); self.geometry("560x420"); self.resizable(True, True)
+        self.title(self.tr("new.chat.select_title")); self.geometry("560x420"); self.resizable(True, True)
         frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
         frm.rowconfigure(2, weight=1); frm.columnconfigure(0, weight=1)
 
@@ -633,8 +688,8 @@ class SelectContactDialog(tk.Toplevel):
         self.lb.bind("<Double-Button-1>", lambda _e: self._ok())
 
         btns = ttk.Frame(frm); btns.grid(row=3, column=0, sticky="e", pady=(8,0))
-        ttk.Button(btns, text=tr("dlg.cancel"), command=self.destroy).pack(side="right")
-        ttk.Button(btns, text=tr("dlg.open"), command=self._ok).pack(side="right", padx=(0,6))
+        ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
+        ttk.Button(btns, text=self.tr("dlg.open"), command=self._ok).pack(side="right", padx=(0,6))
 
         self._refresh()
         self.grab_set()

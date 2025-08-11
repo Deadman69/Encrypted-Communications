@@ -50,6 +50,7 @@ class I18n:
             "settings.socks_proxy": "Proxy SOCKS (ex: socks5h://127.0.0.1:9050)",
             "settings.poll_base": "Polling (base, s)",
             "settings.poll_jitter": "Polling (aléa, s)",
+            "settings.ask_set_pwd": "Demander de définir un mot de passe au démarrage (si aucun n'est défini)",  # <— NOUVEAU
 
             "info.add_contact_first": "Ajoutez d'abord un contact.",
             "new.chat.title": "Nouvelle conversation",
@@ -67,6 +68,8 @@ class I18n:
             "dlg.ok": "OK",
             "dlg.cancel": "Annuler",
             "dlg.open": "Ouvrir",
+            "dlg.yes": "Oui",         # <— util. pour AskSetPasswordDialog
+            "dlg.no": "Non",          # <— util. pour AskSetPasswordDialog
 
             "contact.title.new": "Nouveau contact",
             "contact.title.edit": "Modifier contact",
@@ -108,7 +111,26 @@ class I18n:
             "secure.confirm.title": "Mode sécurisé",
             "secure.confirm.text": "Activer le mode sécurisé va supprimer TOUTES les données locales (identités, contacts, conversations). Continuer ?",
             "secure.exit.title": "Quitter – Mode sécurisé",
-            "secure.exit.text": "Vous êtes en mode sécurisé. En quittant, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?"
+            "secure.exit.text": "Vous êtes en mode sécurisé. En quittant, TOUTES les données locales (identités, contacts, conversations) seront supprimées. Voulez-vous vraiment quitter ?",
+        
+            "loading.history": "⌛ Chargement des messages locaux…",
+            "pwd.unlock.title": "Déverrouiller",
+            "pwd.set.title": "Définir un mot de passe",
+            "pwd.password": "Mot de passe",
+            "pwd.confirm": "Confirmer",
+            "pwd.show": "Afficher le mot de passe",
+            "pwd.mismatch": "Les mots de passe ne correspondent pas.",
+            "pwd.empty": "Le mot de passe ne peut pas être vide.",
+            "pwd.ask_set": "Souhaitez-vous définir un mot de passe maintenant ? (recommandé)",
+            "pwd.bad": "Mot de passe incorrect.",
+            "pwd.never_ask": "Ne plus demander",
+            "pwd.set.info": "Le mot de passe chiffre toutes les données locales (identités, contacts, conversations). Si vous le perdez, il sera impossible de récupérer vos données.",
+            "pwd.strength": "Force du mot de passe",
+            "pwd.vweak": "Très faible",
+            "pwd.weak": "Faible",
+            "pwd.medium": "Moyenne",
+            "pwd.strong": "Forte",
+            "pwd.vstrong": "Très forte"
         }
         en = {
             "app.title": "Encrypted Messaging",
@@ -142,6 +164,7 @@ class I18n:
             "settings.socks_proxy": "SOCKS proxy (e.g. socks5h://127.0.0.1:9050)",
             "settings.poll_base": "Polling (base, s)",
             "settings.poll_jitter": "Polling (jitter, s)",
+            "settings.ask_set_pwd": "Ask to set a password on startup (if none is set)",  # <— NEW
 
             "info.add_contact_first": "Add a contact first.",
             "new.chat.title": "New conversation",
@@ -154,11 +177,13 @@ class I18n:
             "file.saved_to": "Saved to:\n{path}",
             "confirm.delete_contact": "Delete this contact?",
             "confirm.delete_identity": "Delete identity {name}?",
-            "unknown.contact": "Unknown {prefix}",
 
+            "unknown.contact": "Unknown {prefix}",
             "dlg.ok": "OK",
             "dlg.cancel": "Cancel",
             "dlg.open": "Open",
+            "dlg.yes": "Yes",
+            "dlg.no": "No",
 
             "contact.title.new": "New contact",
             "contact.title.edit": "Edit contact",
@@ -200,7 +225,26 @@ class I18n:
             "secure.confirm.title": "Secure mode",
             "secure.confirm.text": "Enabling secure mode will delete ALL local data (identities, contacts, conversations). Continue?",
             "secure.exit.title": "Quit – Secure mode",
-            "secure.exit.text": "You are in secure mode. On exit, ALL local data (identities, contacts, conversations) will be deleted. Do you really want to quit?"
+            "secure.exit.text": "You are in secure mode. On exit, ALL local data (identities, contacts, conversations) will be deleted. Do you really want to quit?",
+
+            "loading.history": "⌛ Loading local messages…",
+            "pwd.unlock.title": "Unlock",
+            "pwd.set.title": "Set a password",
+            "pwd.password": "Password",
+            "pwd.confirm": "Confirm",
+            "pwd.show": "Show password",
+            "pwd.mismatch": "Passwords do not match.",
+            "pwd.empty": "Password cannot be empty.",
+            "pwd.ask_set": "Would you like to set a password now? (recommended)",
+            "pwd.bad": "Wrong password.",
+            "pwd.never_ask": "Don't ask again",
+            "pwd.set.info": "The password encrypts all local data (identities, contacts, conversations). If you lose it, recovery is impossible.",
+            "pwd.strength": "Password strength",
+            "pwd.vweak": "Very weak",
+            "pwd.weak": "Weak",
+            "pwd.medium": "Medium",
+            "pwd.strong": "Strong",
+            "pwd.vstrong": "Very strong"
         }
         self._write_if_missing("fr.json", fr)
         self._write_if_missing("en.json", en)
@@ -266,11 +310,16 @@ class SettingsDialog(tk.Toplevel):
         self.e_jitter = ttk.Entry(frm, width=12); self.e_jitter.grid(row=4, column=1, sticky="w", pady=(6,0))
         self.e_jitter.insert(0, str(cfg.get("polling_jitter", 3)))
 
-        btns = ttk.Frame(frm); btns.grid(row=5, column=0, columnspan=2, pady=(10,0), sticky="e")
+        self.var_ask_pwd = tk.BooleanVar(value=bool(cfg.get("ask_set_password", True)))
+        self.chk_ask_pwd = ttk.Checkbutton(
+            frm, text=self.tr("settings.ask_set_pwd"), variable=self.var_ask_pwd
+        )
+        self.chk_ask_pwd.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8,0))
+
+        btns = ttk.Frame(frm); btns.grid(row=6, column=0, columnspan=2, pady=(10,0), sticky="e")
         ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
         ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
 
-        # init state
         self._toggle_proxy_state()
 
         self.bind("<Return>", lambda _e: self._ok())
@@ -292,6 +341,7 @@ class SettingsDialog(tk.Toplevel):
             "socks_proxy": self.e_proxy.get().strip(),
             "polling_base": base,
             "polling_jitter": jitter,
+            "ask_set_password": bool(self.var_ask_pwd.get()),
         }
         self.destroy()
 
@@ -775,4 +825,149 @@ class SelectContactDialog(tk.Toplevel):
                 self.destroy()
             return
         self.result = self._idx_to_contact[sel[0]]
+        self.destroy()
+
+class PasswordDialog(tk.Toplevel):
+    """
+    mode='unlock' -> un seul champ (vide = annuler).
+    mode='set'    -> deux champs + info + jauge de force.
+    .result = str(password) si OK, sinon None.
+    """
+    def __init__(self, parent, tr, mode: str = "unlock"):
+        super().__init__(parent)
+        self.tr = tr
+        self.mode = mode
+        self.title(tr("pwd.unlock.title") if mode == "unlock" else tr("pwd.set.title"))
+        self.resizable(False, False)
+        self.result = None
+
+        frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
+        frm.columnconfigure(1, weight=1)
+
+        ttk.Label(frm, text=self.tr("pwd.password")).grid(row=0, column=0, sticky="w")
+        self.var_show = tk.BooleanVar(value=False)
+        self.e_pwd = ttk.Entry(frm, show="*"); self.e_pwd.grid(row=0, column=1, sticky="ew")
+        self.e_pwd.bind("<KeyRelease>", lambda _e: self._update_strength())
+
+        if mode == "set":
+            ttk.Label(frm, text=self.tr("pwd.confirm")).grid(row=1, column=0, sticky="w", pady=(6,0))
+            self.e_confirm = ttk.Entry(frm, show="*"); self.e_confirm.grid(row=1, column=1, sticky="ew", pady=(6,0))
+
+            # Texte explicatif
+            ttk.Label(frm, text=self.tr("pwd.set.info"), wraplength=360, justify="left")\
+               .grid(row=2, column=0, columnspan=2, sticky="w", pady=(8,0))
+
+            # Jauge de force
+            ttk.Label(frm, text=self.tr("pwd.strength")).grid(row=3, column=0, sticky="w", pady=(8,0))
+            self.bar = ttk.Progressbar(frm, orient="horizontal", mode="determinate", maximum=100)
+            self.bar.grid(row=3, column=1, sticky="ew", pady=(8,0))
+            self.lbl_strength = ttk.Label(frm, text="")
+            self.lbl_strength.grid(row=4, column=1, sticky="w", pady=(2,0))
+
+            row_btn = 5
+        else:
+            row_btn = 1
+
+        ttk.Checkbutton(frm, text=self.tr("pwd.show"), variable=self.var_show,
+                        command=self._toggle).grid(row=row_btn, column=0, columnspan=2, sticky="w", pady=(8,0))
+
+        btns = ttk.Frame(frm); btns.grid(row=row_btn+1, column=0, columnspan=2, sticky="e", pady=(10,0))
+        ttk.Button(btns, text=self.tr("dlg.cancel"), command=self.destroy).pack(side="right")
+        ttk.Button(btns, text=self.tr("dlg.ok"), command=self._ok).pack(side="right", padx=(0,6))
+
+        self.bind("<Return>", lambda _e: self._ok())
+        self.grab_set(); self.e_pwd.focus_set()
+        self._update_strength()
+
+    def _toggle(self):
+        ch = "" if self.var_show.get() else "*"
+        self.e_pwd.configure(show=ch)
+        if hasattr(self, "e_confirm"):
+            self.e_confirm.configure(show=ch)
+
+    # Strength estimation (0..100) + label
+    def _estimate_strength(self, s: str) -> (int, str):
+        if not s:
+            return 0, self.tr("pwd.vweak")
+        score = 0
+        
+        # Length
+        L = len(s)
+        if L >= 20: score += 60
+        elif L >= 16: score += 50
+        elif L >= 12: score += 40
+        elif L >= 8:  score += 25
+        else:         score += 10
+
+        # Diversity
+        cats = [
+            any(c.islower() for c in s),
+            any(c.isupper() for c in s),
+            any(c.isdigit() for c in s),
+            any(not c.isalnum() for c in s),
+        ]
+        score += 10 * sum(1 for x in cats if x)
+        score = max(0, min(100, score))
+        if score < 25: label = self.tr("pwd.vweak")
+        elif score < 45: label = self.tr("pwd.weak")
+        elif score < 65: label = self.tr("pwd.medium")
+        elif score < 85: label = self.tr("pwd.strong")
+        else: label = self.tr("pwd.vstrong")
+        return score, label
+
+    def _update_strength(self):
+        if self.mode != "set":
+            return
+        val = self.e_pwd.get()
+        score, label = self._estimate_strength(val)
+        try:
+            self.bar["value"] = score
+            self.lbl_strength.configure(text=label)
+        except Exception:
+            pass
+
+    def _ok(self):
+        pwd = (self.e_pwd.get() or "").strip()
+        if self.mode == "set":
+            confirm = (getattr(self, "e_confirm", None).get() or "").strip()
+            if not pwd:
+                messagebox.showerror(self.title(), self.tr("pwd.empty")); return
+            if pwd != confirm:
+                messagebox.showerror(self.title(), self.tr("pwd.mismatch")); return
+        else:
+            if not pwd:
+                self.result = None
+                self.destroy()
+                return
+        self.result = pwd
+        self.destroy()
+
+class AskSetPasswordDialog(tk.Toplevel):
+    """
+    Demande 'définir un mot de passe maintenant ?' avec une case 'Ne plus demander'.
+    .result = {"set_now": bool, "dont_ask": bool}
+    """
+    def __init__(self, parent, tr):
+        super().__init__(parent)
+        self.tr = tr
+        self.title(self.tr("pwd.set.title"))
+        self.resizable(False, False)
+        self.result = None
+
+        frm = ttk.Frame(self, padding=10); frm.pack(fill="both", expand=True)
+        frm.columnconfigure(0, weight=1)
+
+        ttk.Label(frm, text=self.tr("pwd.ask_set"), wraplength=360, justify="left").grid(row=0, column=0, sticky="w")
+        self.var_skip = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text=self.tr("pwd.never_ask"), variable=self.var_skip).grid(row=1, column=0, sticky="w", pady=(8,0))
+
+        btns = ttk.Frame(frm); btns.grid(row=2, column=0, sticky="e", pady=(10,0))
+        ttk.Button(btns, text=self.tr("dlg.no"),  command=lambda: self._close(False)).pack(side="right")
+        ttk.Button(btns, text=self.tr("dlg.yes"), command=lambda: self._close(True)).pack(side="right", padx=(0,6))
+
+        self.grab_set()
+        self.bind("<Return>", lambda _e: self._close(True))
+
+    def _close(self, set_now: bool):
+        self.result = {"set_now": set_now, "dont_ask": bool(self.var_skip.get())}
         self.destroy()

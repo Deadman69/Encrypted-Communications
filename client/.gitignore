@@ -8,3 +8,4 @@ contacts.json
 identities.json
 conversations.vault
 vault.key
+master.lock

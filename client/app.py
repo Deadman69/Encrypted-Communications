@@ -26,6 +26,9 @@ CONTACTS_FILE = "contacts.json"
 VAULT_FILE    = "conversations.vault"
 VAULT_KEY_FILE= "vault.key"
 
+LOCK_FILE = "master.lock"
+ENC_MAGIC = b"EMSGENC1"
+
 REPO_URL    = "https://github.com/Deadman69/Encrypted-Communications"
 LICENSE_URL = "https://www.gnu.org/licenses/agpl-3.0.en.html"
 
@@ -33,13 +36,61 @@ DEFAULT_CONFIG = {
     "server_url": "http://localhost:8000",
     "language": "en",
     "secure_mode": False,
+    # demander de définir un mot de passe quand aucun n'est défini
+    "ask_set_password": True,
     # network
     "use_tor": True,
     "socks_proxy": "socks5h://127.0.0.1:9050",
     # polling
-    "polling_base": 5.0,   # seconds
-    "polling_jitter": 3.0  # +/- seconds
+    "polling_base": 5.0,
+    "polling_jitter": 3.0
 }
+
+class CryptoManager:
+    """
+    Chiffre/déchiffre des JSON (contacts, identités, conversations) avec une clé maître optionnelle.
+    - master_key: 32 bytes (None => on écrit/lit en clair pour compat ascendante)
+    - on dérive des sous-clés par contexte: blake2b(key=master_key, data=context)
+    - format chiffré: ENC_MAGIC + SecretBox(subkey).encrypt(json_bytes)
+    """
+    def __init__(self, master_key: Optional[bytes]):
+        self.master_key = master_key
+
+    def _subkey(self, context: str) -> Optional[bytes]:
+        if not self.master_key:
+            return None
+        h = hashlib.blake2b(context.encode("utf-8"), key=self.master_key, digest_size=32)
+        return h.digest()
+
+    def save_json(self, path: str, obj, context: str):
+        data = json.dumps(obj, separators=(',', ':'), ensure_ascii=False).encode("utf-8")
+        sub = self._subkey(context)
+        if not sub:
+            # clair (compat)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(data.decode("utf-8"))
+            return
+        ct = SecretBox(sub).encrypt(data)  # nonce aléatoire inclus
+        with open(path, "wb") as f:
+            f.write(ENC_MAGIC + ct)
+
+    def load_json(self, path: str, default, context: str):
+        if not os.path.exists(path):
+            return default
+        with open(path, "rb") as f:
+            raw = f.read()
+        if raw.startswith(ENC_MAGIC):
+            sub = self._subkey(context)
+            if not sub:
+                raise RuntimeError("File is encrypted but no password provided")
+            enc = raw[len(ENC_MAGIC):]
+            data = SecretBox(sub).decrypt(enc)
+            return json.loads(data.decode("utf-8"))
+        else:
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                raise
 
 def bundle_path(*parts):
     base = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
@@ -130,30 +181,36 @@ class Identity:
         }
 
 class IdentityStore:
-    def __init__(self, path=IDENTS_FILE, bootstrap_default: bool = True):
+    def __init__(self, path=IDENTS_FILE, bootstrap_default: bool = True, crypto: Optional[CryptoManager]=None):
         self.path = path
         self.bootstrap_default = bootstrap_default
+        self.crypto = crypto or CryptoManager(None)
         self.identities: Dict[str, Identity] = {}
         self.load()
 
     def load(self):
         if os.path.exists(self.path):
-            with open(self.path,"r", encoding="utf-8") as f:
-                arr = json.load(f)
+            try:
+                arr = self.crypto.load_json(self.path, default=[], context="identities")
+            except Exception:
+                # fallback clair
+                with open(self.path, "r", encoding="utf-8") as f:
+                    arr = json.load(f)
         else:
             arr = [Identity.generate("Default Identity").to_dict()] if self.bootstrap_default else []
-            with open(self.path,"w", encoding="utf-8") as f:
-                json.dump(arr,f,indent=4, ensure_ascii=False)
+            self.save_arr(arr)
         self.identities = {d["id"]: Identity(
             id_=d["id"], name=d["name"],
             box_sk_hex=d["box_private_key"], box_pk_hex=d["box_public_key"],
             sign_sk_hex=d["sign_private_key"], sign_pk_hex=d["sign_public_key"]
         ) for d in arr}
 
+    def save_arr(self, arr):
+        self.crypto.save_json(self.path, arr, context="identities")
+
     def save(self):
         arr = [idn.to_dict() for idn in self.identities.values()]
-        with open(self.path,"w", encoding="utf-8") as f:
-            json.dump(arr,f,indent=4, ensure_ascii=False)
+        self.save_arr(arr)
 
     def add(self, name: str) -> Identity:
         idn = Identity.generate(name)
@@ -188,21 +245,24 @@ class IdentityStore:
         return list(self.identities.values())
 
 class ContactsStore:
-    def __init__(self, path=CONTACTS_FILE):
+    def __init__(self, path=CONTACTS_FILE, crypto: Optional[CryptoManager]=None):
         self.path = path
+        self.crypto = crypto or CryptoManager(None)
         self._arr: List[Dict] = []
         self.load()
 
     def load(self):
         if os.path.exists(self.path):
-            with open(self.path,"r", encoding="utf-8") as f:
-                self._arr = json.load(f)
+            try:
+                self._arr = self.crypto.load_json(self.path, default=[], context="contacts")
+            except Exception:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    self._arr = json.load(f)
         else:
             self._arr = []; self.save()
 
     def save(self):
-        with open(self.path,"w", encoding="utf-8") as f:
-            json.dump(self._arr,f,indent=4, ensure_ascii=False)
+        self.crypto.save_json(self.path, self._arr, context="contacts")
 
     def items(self) -> List[Dict]:
         return list(self._arr)
@@ -235,9 +295,25 @@ class Conversation:
 class MessengerApp:
     def __init__(self, root):
         self.root = root
+        # Avoid white empty window
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+
         self.cfg = load_config()
         self.i18n = I18n(langs_dir=bundle_path("langs"), default_lang=self.cfg.get("language", "en"))
         self.tr = self.i18n.t
+
+        self.crypto = CryptoManager(None)
+
+        # Init password (can close app if closed)
+        if not self.cfg.get("secure_mode", False):
+            ok = self._init_password()
+            if not ok:
+                try: self.root.destroy()
+                except Exception: pass
+                return
 
         # secure mode: purge local storage except config
         if self.cfg.get("secure_mode", False):
@@ -251,8 +327,8 @@ class MessengerApp:
         self.pow  = PoWHelper(self.cfg["server_url"], self.http)
 
         # stores
-        self.ident_store = IdentityStore(bootstrap_default=not self.cfg.get("secure_mode", False))
-        self.contacts = ContactsStore()
+        self.ident_store = IdentityStore(bootstrap_default=not self.cfg.get("secure_mode", False), crypto=self.crypto)
+        self.contacts = ContactsStore(crypto=self.crypto)
 
         # state
         self.conversations: Dict[Tuple[str,str], Conversation] = {}
@@ -262,14 +338,167 @@ class MessengerApp:
         self._seen_ids = set()
         self._busy = 0
         self._pending: Dict[str, threading.Event] = {}
-        self._session_tokens: Dict[str, Tuple[str,int]] = {}  # identity_id -> (token, expires_at)
+        self._session_tokens: Dict[str, Tuple[str,int]] = {}
 
-        self._load_history()
-        self._register_all_identities()
+        self._history_loaded = False
         self._build_ui()
+        self._show_loading_banner()
+        threading.Thread(target=self._load_history_thread, daemon=True).start()
+
+        self.root.after(80, self._on_history_loaded_tick)
+
+        self._register_all_identities()
         self._refresh_conv_sidebar(select_key=self._current_key)
         self._start_poll_thread()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        try:
+            self.root.deiconify()
+        except Exception:
+            pass
+
+    def _scrypt_key(self, password: str, salt: bytes) -> bytes:
+        pw = password.encode("utf-8")
+        # Try multiple parameters (from stronger to most compatible)
+        tries = [
+            dict(n=2**15, r=8, p=1, maxmem=64*1024*1024),  # ~32 MiB required, we allow 64 MiB
+            dict(n=2**14, r=8, p=1, maxmem=64*1024*1024),  # ~16 MiB
+            dict(n=2**14, r=8, p=1, maxmem=0),             # no explicit memory limit
+            dict(n=2**13, r=8, p=1, maxmem=0),             # ~8 MiB (last chance)
+        ]
+        last_err = None
+        for params in tries:
+            try:
+                return hashlib.scrypt(pw, salt=salt, dklen=32, **params)
+            except (ValueError, MemoryError) as e:
+                last_err = e
+                continue
+        raise last_err or ValueError("scrypt failed")
+
+    def _init_password(self) -> bool:
+        """
+        Initialise self.crypto.
+        True  => continuer le lancement
+        False => l'utilisateur a annulé (ou lock corrompu) -> quitter
+        """
+        from interface import PasswordDialog, AskSetPasswordDialog
+
+        if os.path.exists(LOCK_FILE):
+            # Déverrouillage
+            try:
+                with open(LOCK_FILE, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                salt = base64.b64decode(meta["salt"])
+                box_hex = meta["box"]
+            except Exception:
+                messagebox.showerror(self.tr("pwd.unlock.title"), "Lock file corrupted.")
+                return False
+
+            while True:
+                dlg = PasswordDialog(self.root, self.tr, mode="unlock")
+                self.root.wait_window(dlg)
+                if not dlg.result:
+                    # Vide = annuler proprement
+                    return False
+                key = self._scrypt_key(dlg.result, salt)
+                try:
+                    SecretBox(key).decrypt(bytes.fromhex(box_hex))
+                    self.crypto = CryptoManager(key)
+                    return True
+                except Exception:
+                    messagebox.showerror(self.tr("pwd.unlock.title"), self.tr("pwd.bad"))
+        else:
+            # Aucun mot de passe : proposer d'en définir un (si activé dans la config)
+            if self.cfg.get("ask_set_password", True):
+                ask = AskSetPasswordDialog(self.root, self.tr)
+                self.root.wait_window(ask)
+                if ask.result and ask.result.get("dont_ask"):
+                    self.cfg["ask_set_password"] = False
+                    save_config(self.cfg)
+
+                if ask.result and ask.result.get("set_now"):
+                    # Création d'un nouveau mot de passe -> chiffrer immédiatement les fichiers existants
+                    dlg = PasswordDialog(self.root, self.tr, mode="set")
+                    self.root.wait_window(dlg)
+                    if dlg.result:
+                        salt = os.urandom(16)
+                        key = self._scrypt_key(dlg.result, salt)
+                        probe = SecretBox(key).encrypt(b"OK").hex()
+                        with open(LOCK_FILE, "w", encoding="utf-8") as f:
+                            json.dump(
+                                {"ver": 1, "salt": base64.b64encode(salt).decode(), "box": probe},
+                                f, indent=2
+                            )
+                        self.crypto = CryptoManager(key)
+                        # <<< NOUVEAU : chiffrer immédiatement tout ce qui existe >>>
+                        try:
+                            self._encrypt_existing_data_files()
+                        except Exception as e:
+                            print("encrypt_existing_data_files error:", e)
+                        return True
+                    # Annule la création -> pas de mot de passe
+                    self.crypto = CryptoManager(None)
+                    return True
+
+            # Cas « ne plus demander » ou refus : pas de mot de passe
+            self.crypto = CryptoManager(None)
+            return True
+    
+    def _encrypt_existing_data_files(self):
+        """
+        Chiffre sur place les fichiers locaux si actuellement en clair ou en ancien format.
+        Nécessite self.crypto.master_key non nul (mot de passe défini).
+        """
+        if not getattr(self.crypto, "master_key", None):
+            return
+
+        def migrate_json_file(path: str, context: str, *, is_vault: bool = False):
+            if not os.path.exists(path):
+                return
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read()
+
+                # Déjà au nouveau format chiffré ?
+                if raw.startswith(ENC_MAGIC):
+                    return
+
+                obj = None
+
+                # 1) Essayer en clair
+                try:
+                    obj = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    obj = None
+
+                # 2) Vault ancien format (SecretBox + VAULT_KEY_FILE)
+                if obj is None and is_vault:
+                    try:
+                        box = SecretBox(self._vault_key())
+                        dec = box.decrypt(raw)
+                        obj = json.loads(dec.decode("utf-8"))
+                        # On peut supprimer l’ancienne clé de vault
+                        try:
+                            if os.path.exists(VAULT_KEY_FILE):
+                                os.remove(VAULT_KEY_FILE)
+                        except Exception:
+                            pass
+                    except Exception:
+                        obj = None
+
+                if obj is None:
+                    # Rien à migrer (fichier inconnu)
+                    return
+
+                # Réécriture chiffrée avec la master key
+                self.crypto.save_json(path, obj, context=context)
+
+            except Exception as e:
+                print(f"encrypt_existing: erreur sur {path}: {e}")
+
+        migrate_json_file(IDENTS_FILE,   "identities")
+        migrate_json_file(CONTACTS_FILE, "contacts")
+        migrate_json_file(VAULT_FILE,    "vault", is_vault=True)
 
     # ----- vault -----
     def _vault_key(self) -> bytes:
@@ -291,7 +520,11 @@ class MessengerApp:
 
     def _save_history(self):
         if self.cfg.get("secure_mode", False):
-            self._purge_vault(); return
+            # secure_mode: pas de persistance
+            try:
+                if os.path.exists(VAULT_FILE): os.remove(VAULT_FILE)
+            except: pass
+            return
         try:
             data = {"version": 1, "current_key": list(self._current_key) if self._current_key else None, "conversations": []}
             for key, conv in self.conversations.items():
@@ -299,6 +532,7 @@ class MessengerApp:
                 for m in conv.messages:
                     m2 = dict(m)
                     if "data" in m2 and isinstance(m2["data"], (bytes, bytearray)):
+                        # stocker en base64; on gardera le lazy-decode à l’affichage
                         m2["data_b64"] = base64.b64encode(m2.pop("data")).decode()
                     msgs.append(m2)
                 data["conversations"].append({
@@ -309,25 +543,36 @@ class MessengerApp:
                     "messages": msgs,
                     "unread": conv.unread
                 })
-            raw = json.dumps(data, separators=(',',':')).encode()
-            box = SecretBox(self._vault_key())
-            nonce = nacl_random(SecretBox.NONCE_SIZE)
-            enc = box.encrypt(raw, nonce)
-            with open(VAULT_FILE, "wb") as f: f.write(enc)
+            # Nouveau format chiffré (ou clair selon crypto)
+            self.crypto.save_json(VAULT_FILE, data, context="vault")
         except Exception as e:
             print("save_history error:", e)
 
     def _load_history(self):
         if self.cfg.get("secure_mode", False):
-            self._purge_vault(); return
+            return
         if not os.path.exists(VAULT_FILE):
             return
+        # 1) tenter le nouveau format (CryptoManager)
         try:
-            with open(VAULT_FILE, "rb") as f:
-                enc = f.read()
-            box = SecretBox(self._vault_key())
-            raw = box.decrypt(enc)
-            obj = json.loads(raw.decode())
+            obj = self.crypto.load_json(VAULT_FILE, default=None, context="vault")
+            if obj is None:
+                return
+        except Exception:
+            # 2) compat ancien format (SecretBox + VAULT_KEY_FILE)
+            try:
+                with open(VAULT_FILE, "rb") as f:
+                    enc = f.read()
+                # ancien schéma
+                box = SecretBox(self._vault_key())  # garde la compat; _vault_key() existe toujours
+                raw = box.decrypt(enc)
+                obj = json.loads(raw.decode())
+                # Note: au prochain _save_history(), on réécrira au nouveau format
+            except Exception as e:
+                print("load_history legacy error:", e)
+                return
+
+        try:
             self._current_key = tuple(obj.get("current_key") or []) or None
             for rec in obj.get("conversations", []):
                 key = tuple(rec["key"])
@@ -339,12 +584,36 @@ class MessengerApp:
                 )
                 conv.unread = int(rec.get("unread", 0))
                 for m in rec.get("messages", []):
-                    if "data_b64" in m:
-                        m["data"] = base64.b64decode(m.pop("data_b64"))
-                    conv.messages.append(m)
+                    # Lazy: ne pas décoder les data_b64 ici (on le fera à l’affichage)
+                    conv.messages.append(dict(m))
                 self.conversations[key] = conv
         except Exception as e:
-            print("load_history error:", e)
+            print("load_history parse error:", e)
+    
+    # ----- history ------
+    def _show_loading_banner(self):
+        try:
+            self.chat_text.configure(state="normal")
+            self.chat_text.delete("1.0", "end")
+            self.chat_text.insert("end", self.tr("loading.history") + "\n", ("meta_in",))
+            self.chat_text.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _load_history_thread(self):
+        try:
+            self._load_history()
+        except Exception as e:
+            print("load_history (thread) error:", e)
+        finally:
+            self._history_loaded = True
+
+    def _on_history_loaded_tick(self):
+        if self._history_loaded:
+            self._refresh_conv_sidebar(select_key=self._current_key)
+        else:
+            self.root.after(80, self._on_history_loaded_tick)
+
 
     # ----- register -----
     def _register_identity(self, idn):
@@ -636,6 +905,15 @@ class MessengerApp:
         self.chat_text.configure(state="disabled"); self.chat_text.see("end")
 
     def _render_conversation(self):
+        if not self._history_loaded and (not self.current_conv or not self.current_conv.messages):
+            try:
+                self.chat_text.configure(state="normal")
+                self.chat_text.insert("end", self.tr("loading.history") + "\n", ("meta_in",))
+                self.chat_text.configure(state="disabled")
+            except Exception:
+                pass
+            return
+
         self.chat_text.configure(state="normal"); self.chat_text.delete("1.0", "end"); self.chat_text.configure(state="disabled")
         if not self.current_conv: return
         for m in self.current_conv.messages:
@@ -644,10 +922,18 @@ class MessengerApp:
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(m["ts"]))
             if m["kind"] == "text":
                 self._append_line(m["text"], direction)
-            elif m["kind"] == "image":
-                self._append_image(m["data"], direction)
             else:
-                self._append_file_link(m.get("filename","file"), m["data"], direction)
+                # Lazy decode des payloads binaires
+                if "data" not in m and "data_b64" in m:
+                    try:
+                        m["data"] = base64.b64decode(m["data_b64"])
+                    except Exception:
+                        m["data"] = b""
+
+                if m["kind"] == "image":
+                    self._append_image(m.get("data", b""), direction)
+                else:
+                    self._append_file_link(m.get("filename","file"), m.get("data", b""), direction)
 
             if m.get("pending"):
                 txt = self.tr("msg.sending")
@@ -944,7 +1230,11 @@ class MessengerApp:
                     self._poll_once_for_identity(idn)
             except Exception:
                 ok = False
-            self._set_status(ok)
+
+            try:
+                self.root.after(0, lambda ok=ok: self._set_status(ok))
+            except Exception:
+                pass
 
             base = float(self.cfg.get("polling_base", 5.0))
             jitter = float(self.cfg.get("polling_jitter", 3.0))
@@ -1038,8 +1328,10 @@ class MessengerApp:
             updated = True
 
         if updated:
-            self._refresh_conv_sidebar(select_key=self._current_key)
-            self._save_history()
+            try:
+                self.root.after(0, lambda: (self._refresh_conv_sidebar(select_key=self._current_key), self._save_history()))
+            except Exception:
+                pass
 
     def _toggle_secure(self):
         new_val = bool(self.secure_var.get())

@@ -14,7 +14,12 @@ def load_config():
             "pow_difficulty": 5,
             "pow_window_secs": 120,
             "auto_clean_timer": 60,
-            "session_token_ttl": 300
+            "session_token_ttl": 300,
+
+            "max_message_ttl_secs": 604800,
+            "max_body_bytes": 314572800, # 300 MiB max per request
+            "max_db_bytes": 524288000, # 500 MiB database max size 
+            "warn_db_bytes": 314572800 # 300 MiB database warning size
         }
         with open(CONFIG_FILE, "w") as f: json.dump(cfg, f, indent=4)
         return cfg
@@ -29,6 +34,10 @@ POW_DIFF = int(config.get("pow_difficulty", 5))
 POW_WIN  = int(config.get("pow_window_secs", 120))
 AUTO_CLEAN_TIMER   = int(config.get("auto_clean_timer", 120))
 SESSION_TOKEN_TTL  = int(config.get("session_token_ttl", 300))
+MAX_MESSAGE_TTL  = int(config.get("max_message_ttl_secs", 7*24*3600))
+MAX_BODY_BYTES   = int(config.get("max_body_bytes", 300*1024*1024))
+MAX_DB_BYTES     = int(config.get("max_db_bytes", 500*1024*1024))
+WARN_DB_BYTES    = int(config.get("warn_db_bytes", 300*1024*1024))
 
 def connect():
     conn = sqlite3.connect(DATABASE, check_same_thread=False)

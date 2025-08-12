@@ -1,0 +1,1 @@
+- Gérer la taille max des messages (côté client)

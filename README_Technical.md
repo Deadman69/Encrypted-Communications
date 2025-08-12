@@ -253,28 +253,19 @@ python app.py
 
 ```powershell
 cd client
-pyinstaller --clean --noconfirm ^
-  --onefile --noconsole ^
-  --name EncryptedClient ^
-  --add-data "langs;langs" ^
-  app.py
-```
-
-* PyInstaller (macOS/Linux, one-file):
-
-```bash
-cd client
-pyinstaller --clean --noconfirm \
-  --onefile --noconsole \
-  --name EncryptedClient \
-  --add-data "langs:langs" \
-  app.py
-```
-
-If hidden imports are needed:
-
-```
---hidden-import "nacl.signing" --hidden-import "nacl.public" --hidden-import "nacl.bindings" --hidden-import "PIL._imaging"
+pyinstaller --onefile --clean --noconsole --noconfirm --name EncryptedClient \
+    --hidden-import=_cffi_backend \
+    --hidden-import=requests.packages.urllib3 \
+    --hidden-import=requests \
+    --hidden-import=nacl.public \
+    --hidden-import=nacl.signing \
+    --hidden-import=nacl.encoding \
+    --hidden-import=nacl.secret \
+    --hidden-import=nacl.utils \
+    --hidden-import=PIL \
+    --hidden-import=Pillow \
+    --add-data "langs;langs" \
+    app.py
 ```
 
 ### Server
